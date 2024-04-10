@@ -24,6 +24,9 @@
 - [ ] tree attention
     - [ ] tree flash attention
 - [ ] target model cache manager?
+- [ ] ppl test
+    1. reproduce streaming llm
+    2. test model performence
 
 ## bug killing
 
@@ -33,7 +36,11 @@
 ## tips
 
 - how dose medusa do batching?
+- how long the seqlen cause decoding performance down
+    * note, it deppends
 
 ## NOTE
 
 - Sink may cause repeat
+- cliff point is not the balance point
+

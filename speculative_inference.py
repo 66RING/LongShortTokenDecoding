@@ -6,7 +6,6 @@ from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
 
 # TODO: rename
-@torch.no_grad()
 class SPD:
     def __init__(self, model, cache_manager):
         self.draft_model = model
@@ -23,6 +22,7 @@ class SPD:
         return self.target_model.parameters()
 
     # TODO: batching support
+    @torch.no_grad()
     def generate(
         self,
         input_ids: torch.Tensor,
@@ -169,7 +169,7 @@ class SPD:
             draft_next_ids = generated_ids[:, -1].unsqueeze(1)
             past_key_values = past_key_values_trimmed
             generated_len += accept_len + 1
-            pbar.set_postfix({"cache_size": cache_size, "acc": accept_len/max_sample})
+            pbar.set_postfix({"cache_size": cache_size, "acc": f"{accept_len/max_sample:.2f}"})
             pbar.update(accept_len+1)
 
             end = time.time()
