@@ -179,7 +179,7 @@ def main(args):
         start_size=args.start_size, recent_size=args.recent_size
     )
     # kv_cache_manager = None
-    print("kv_cache_manager: ", kv_cache_manager)
+    print("using kv_cache_manager: ", kv_cache_manager)
 
     model = SPD(model, cache_manager=kv_cache_manager)
     generated_ids, prefill_time, decode_time = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=4)

@@ -10,49 +10,7 @@ from tqdm import tqdm
 from modeling_llama import LlamaForCausalLM
 
 @torch.no_grad()
-def greedy_generate(model, tokenizer, input_ids, past_key_values, max_gen_len):
-    outputs = model(
-        input_ids=input_ids,
-        past_key_values=past_key_values,
-        use_cache=True,
-    )
-    past_key_values = outputs.past_key_values
-    pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-    generated_ids = [pred_token_idx.item()]
-    pos = 0
-    for _ in range(max_gen_len - 1):
-        outputs = model(
-            input_ids=pred_token_idx,
-            past_key_values=past_key_values,
-            use_cache=True,
-        )
-        past_key_values = outputs.past_key_values
-        pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-        generated_ids.append(pred_token_idx.item())
-        generated_text = (
-            tokenizer.decode(
-                generated_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-                spaces_between_special_tokens=False,
-            )
-            .strip()
-            .split(" ")
-        )
-
-        now = len(generated_text) - 1
-        if now > pos:
-            print(" ".join(generated_text[pos:now]), end=" ", flush=True)
-            pos = now
-
-        if pred_token_idx == tokenizer.eos_token_id:
-            break
-    print(" ".join(generated_text[pos:]), flush=True)
-    return past_key_values
-
-@torch.no_grad()
 def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, kv_cache_manager, **kwargs):
-    print("start")
     prefill_time = 0
     decode_time = []
 
@@ -156,6 +114,14 @@ def main(args):
     prompt = [
         "One day, Lily met a Shoggoth.",
         "Once upon a time, there was a dragon.",
+        # "Tell a story begin with: One day, Lily met a Shoggoth.",
+        # "Once upon a time, there was a dragon.",
+        # "What is the capital of China?",
+        # "What is the capital of United States?",
+        # "Who is Alen Turing?",
+        # "Please tell me a joke.",
+        # "What is the meaning of life?",
+        # "Please recommend me a some movies.",
     ]
 
     input_ids = tokenizer(prompt, return_tensors="pt", padding=True).input_ids
@@ -163,13 +129,13 @@ def main(args):
 
     batch_size, seq_len = input_ids.shape
     # max_gen_len = 1024 * 32
-    max_gen_len = 1024 * 4
+    max_gen_len = 128
 
     args.recent_size = 4
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
-    kv_cache_manager = None
+    # kv_cache_manager = None
     print("kv_cache_manager: ", kv_cache_manager)
 
     past_key_values, prefill_time, decode_time = batch_inference(

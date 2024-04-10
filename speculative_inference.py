@@ -172,7 +172,7 @@ class SPD:
             draft_next_ids = generated_ids[:, -1].unsqueeze(1)
             past_key_values = past_key_values_trimmed
             generated_len += accept_len + 1
-            pbar.set_postfix(cache_size=cache_size)
+            pbar.set_postfix({"cache_size": cache_size, "acc": accept_len/max_sample})
             pbar.update(accept_len+1)
 
             end = time.time()
