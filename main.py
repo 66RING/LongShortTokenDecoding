@@ -134,7 +134,7 @@ def main(args):
     max_gen_len = 1024 * 8
 
     # TODO: performance cliff in about 1k in this case
-    args.recent_size = 1024
+    args.recent_size = 1024000
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
@@ -142,7 +142,10 @@ def main(args):
     print("using kv_cache_manager: ", kv_cache_manager)
 
     model = SPD(model, cache_manager=kv_cache_manager)
+    total_time = time.time()
     generated_ids, prefill_time, decode_time = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=4)
+    torch.cuda.synchronize()
+    total_time = time.time() - total_time
 
     generated_text = (
         tokenizer.decode(
@@ -160,12 +163,13 @@ def main(args):
     # number of tokens in context / time for processing context * batch size
     prefill_tokens_per_second = input_ids.shape[1] / prefill_time * batch_size
     # 1 second / median time per token in seconds * batch size
-    decode_tokens_per_second = 1 / np.median(decode_time) * batch_size
+    decode_tokens_per_second = batch_size * max_gen_len / np.sum(decode_time)
 
     device = next(model.parameters()).device
     memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
     memory_pct = memory_used / (torch.cuda.get_device_properties(device).total_memory / (1024 ** 3)) * 100
 
+    print(f" ** Speed (Total): {total_time:.2f} second")
     print(f" ** Speed (Prefill): {prefill_tokens_per_second:.2f} tokens/second")
     print(f" ** Speed (Decode): {decode_tokens_per_second:.2f} tokens/second")
     print(f" ** Max Memory (VRAM): {memory_used:.2f} GB ({memory_pct:.2f}%)")

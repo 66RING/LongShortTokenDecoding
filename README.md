@@ -32,6 +32,10 @@
 
 - [x] memory larger then no speculative
     - infer mode: `with torch.no_grad()` or `@torch.no_grad()`
+- [x] benchmark bug
+    - [x] decoding tps should lower
+        - only happend in LLM, small model may not
+    - [x] speculative total time should not be median
 
 ## tips
 
