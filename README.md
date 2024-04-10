@@ -4,6 +4,14 @@
 
 ## Roadmap
 
-- streaming llm
-- speculative + streaming
-- flash attn support
+- [x] streaming llm
+- [ ] speculative + streaming
+- [ ] flash attn support
+- [ ] cache manager design
+
+## bug killing
+
+
+## NOTE
+
+- Sink may cause repeat
