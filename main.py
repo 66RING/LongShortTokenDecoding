@@ -1,70 +1,117 @@
-import argparse
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaConfig, LlamaForCausalLM
-from torch.nn import CrossEntropyLoss
-import torch
-import time
 import numpy as np
-import sys
-
-from transformers.modeling_outputs import (
-    CausalLMOutputWithPast,
+import torch
+import argparse
+import time
+from transformers import (
+    AutoTokenizer,
 )
-from transformers.cache_utils import Cache, DynamicCache, StaticCache
-from typing import List, Optional, Set, Tuple, Union
-from accelerate.utils.modeling import set_module_tensor_to_device
-from accelerate import init_empty_weights
+from cache_manager import SinkCache
+from tqdm import tqdm
+from modeling_llama import LlamaForCausalLM
+from speculative_inference import SPD
 
-from speculative_inference import speculative_inferece
+@torch.no_grad()
+def greedy_generate(model, tokenizer, input_ids, past_key_values, max_gen_len):
+    outputs = model(
+        input_ids=input_ids,
+        past_key_values=past_key_values,
+        use_cache=True,
+    )
+    past_key_values = outputs.past_key_values
+    pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+    generated_ids = [pred_token_idx.item()]
+    pos = 0
+    for _ in range(max_gen_len - 1):
+        outputs = model(
+            input_ids=pred_token_idx,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        past_key_values = outputs.past_key_values
+        pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+        generated_ids.append(pred_token_idx.item())
+        generated_text = (
+            tokenizer.decode(
+                generated_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+                spaces_between_special_tokens=False,
+            )
+            .strip()
+            .split(" ")
+        )
+
+        now = len(generated_text) - 1
+        if now > pos:
+            print(" ".join(generated_text[pos:now]), end=" ", flush=True)
+            pos = now
+
+        if pred_token_idx == tokenizer.eos_token_id:
+            break
+    print(" ".join(generated_text[pos:]), flush=True)
+    return past_key_values
+
+@torch.no_grad()
+def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, kv_cache_manager, **kwargs):
+    print("start")
+    prefill_time = 0
+    decode_time = []
+
+    batch_size = input_ids.size(0)
+
+    # prefill phase
+    start = time.time()
+    outputs = model(
+        input_ids=input_ids,
+        past_key_values=past_key_values,
+        use_cache=True,
+    )
+    torch.cuda.synchronize()
+    end = time.time()
+    prefill_time = (end - start)
+
+    past_key_values = outputs.past_key_values
+    if kv_cache_manager is not None:
+        past_key_values = kv_cache_manager(past_key_values)
+    # logits.shape: [bs, seq_len, vocab_size]
+    # get the last token and predict the next token idx
+    pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+
+    # init generated_ids
+    generated_ids = pred_token_idx
+
+    pbar = tqdm(total=max_gen_len - 1)
+    cache_size = 0
+
+    for i in range(max_gen_len - 1):
+        start = time.time()
+        # decoding phase, generate next token with last token and kv cache
+        outputs = model(
+            input_ids=pred_token_idx,
+            past_key_values=past_key_values,
+            use_cache=True,
+            **kwargs,
+        )
+        past_key_values = outputs.past_key_values
+        if kv_cache_manager is not None:
+            past_key_values = kv_cache_manager(past_key_values)
+        # NOTE: layer 0, key cache
+        cache_size = past_key_values[0][0].shape[2]
+        pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+        generated_ids = torch.cat([generated_ids, pred_token_idx], dim=1)
+
+        torch.cuda.synchronize()
+        end = time.time()
+        decode_time.append(end - start)
+
+        pbar.set_postfix(cache_size=cache_size)
+        pbar.update(1)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str, default="nickypro/tinyllama-110M")
-    parser.add_argument("--draft_model", type=str, default=None)
-    args = parser.parse_args()
 
-    MAX_LENGTH = 128
-    prompt = [
-        "One day, Lily met a Shoggoth.",
-        # "Tell a story begin with: One day, Lily met a Shoggoth.",
-        # "Once upon a time, there was a dragon.",
-        # "What is the capital of China?",
-        # "What is the capital of United States?",
-        # "Who is Alen Turing?",
-        # "Please tell me a joke.",
-        # "What is the meaning of life?",
-        # "Please recommend me a some movies.",
-    ]
-    target_model_path = "/home/ring/Documents/workspace/modules/tinyllama-110M"
-    draft_model_path = "/home/ring/Documents/workspace/modules/tinyllama-42m"
-    draft_model_path = target_model_path
-
-    tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    target_model = AutoModelForCausalLM.from_pretrained(target_model_path, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16).to("cuda")
-    draft_model = AutoModelForCausalLM.from_pretrained(draft_model_path, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16).to("cuda")
-
-    input_ids = tokenizer(prompt, return_tensors="pt", padding=True)["input_ids"]
-    input_ids = input_ids.to(target_model.device)
-
-    print(f"input_ids.shape: {input_ids.shape}")
-    past_key_values = None
-
-    generated_ids = speculative_inferece(input_ids, past_key_values, target_model, draft_model, max_len=128)
-
-    '''
-    She was so excited to meet him! She asked him, "What's your name?"
-    The Shoggoth replied, "My name is Shelly. I'm a very special Shelly."
-    Lily asked, "What do you do?"
-    Shelly said, "I like to eat yummy food. I eat lots of yummy food."
-    Lily said, "That sounds fun! Can I try some?"
-    Shelly said, "Sure! I have lots of yummy food. Come with me and I'll show you."
-    So Lily followed Shelly to a nearby
-    '''
-
+    # convert batch of generated_ids to text 
     generated_texts = []
-    for i in range(generated_ids.shape[0]):
+    for i in range(batch_size):
         generated_text = tokenizer.decode(
             generated_ids[i],
             skip_special_tokens=True,
@@ -77,8 +124,106 @@ def main():
         print(f"{ib} >")
         print(" ".join(text), flush=True)
 
+    return past_key_values, prefill_time, decode_time
+
+def main(args):
+    model_name_or_path = args.model_name_or_path
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name_or_path,
+        trust_remote_code=True,
+    )
+    # NOTE: add pad_token to use padding
+    tokenizer.pad_token = tokenizer.eos_token
+
+    model = LlamaForCausalLM.from_pretrained(
+        model_name_or_path,
+        device_map="auto",
+        # not support flash for now
+        # attn_implementation="flash_attention_2",
+        attn_implementation="eager", # use LlamaAttention to test
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+    )
+    if tokenizer.pad_token_id is None:
+        if tokenizer.eos_token_id is not None:
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+        else:
+            tokenizer.pad_token_id = 0
+
+    model.eval()
+
+    past_key_values = None
+    prompt = [
+        "One day, Lily met a Shoggoth.",
+        # "Once upon a time, there was a dragon.",
+        # "Tell a story begin with: One day, Lily met a Shoggoth.",
+        # "Once upon a time, there was a dragon.",
+        # "What is the capital of China?",
+        # "What is the capital of United States?",
+        # "Who is Alen Turing?",
+        # "Please tell me a joke.",
+        # "What is the meaning of life?",
+        # "Please recommend me a some movies.",
+    ]
+
+    input_ids = tokenizer(prompt, return_tensors="pt", padding=True).input_ids
+    input_ids = input_ids.to(model.device)
+
+    batch_size, seq_len = input_ids.shape
+    # max_gen_len = 1024 * 32
+    max_gen_len = 128
+
+    args.recent_size = 4
+    kv_cache_manager = SinkCache(
+        start_size=args.start_size, recent_size=args.recent_size
+    )
+    # kv_cache_manager = None
+    print("kv_cache_manager: ", kv_cache_manager)
+
+    model = SPD(model, cache_manager=kv_cache_manager)
+    generated_ids, prefill_time, decode_time = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=4)
+
+    generated_text = (
+        tokenizer.decode(
+            generated_ids[0],
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+            spaces_between_special_tokens=False,
+        )
+        .strip()
+        .split(" ")
+    )
+
+    print(" ".join(generated_text), flush=True)
+
+    # number of tokens in context / time for processing context * batch size
+    prefill_tokens_per_second = input_ids.shape[1] / prefill_time * batch_size
+    # 1 second / median time per token in seconds * batch size
+    decode_tokens_per_second = 1 / np.median(decode_time) * batch_size
+
+    device = next(model.parameters()).device
+    memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+    memory_pct = memory_used / (torch.cuda.get_device_properties(device).total_memory / (1024 ** 3)) * 100
+
+    print(f" ** Speed (Prefill): {prefill_tokens_per_second:.2f} tokens/second")
+    print(f" ** Speed (Decode): {decode_tokens_per_second:.2f} tokens/second")
+    print(f" ** Max Memory (VRAM): {memory_used:.2f} GB ({memory_pct:.2f}%)")
 
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_name_or_path", type=str, default="meta/Llama-2-7b-chat-hf"
+    )
+    parser.add_argument("--start_size", type=int, default=4)
+    parser.add_argument("--recent_size", type=int, default=2000)
+    parser.add_argument("--enable_streaming", action="store_true")
+    args = parser.parse_args()
+
+    main(args)
+
+
+
+
