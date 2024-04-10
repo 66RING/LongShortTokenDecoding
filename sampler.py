@@ -1,5 +1,6 @@
 import torch
 from typing import List, Optional, Set, Tuple, Union
+from torch.nn import functional as F
 
 class CacheSampler:
     """

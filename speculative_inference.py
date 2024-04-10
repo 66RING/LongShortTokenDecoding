@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
 
 # TODO: rename
+@torch.no_grad()
 class SPD:
     def __init__(self, model, cache_manager):
         self.draft_model = model
@@ -13,6 +14,8 @@ class SPD:
         self.cache_manager = cache_manager
 
         # TODO: hard code sampler for now
+        # NOTE: sampling may cause huge performance downgrade in prefill phase
+        # self.logits_sampler = TopkToppLogitsSampler(top_k=20, top_p=0.9)
         self.logits_sampler = TopkToppLogitsSampler(top_k=0, top_p=0.0)
         self.accepter = StrictAccepter()
 
@@ -56,11 +59,14 @@ class SPD:
                 use_cache=True,
             )
             past_key_values = outputs.past_key_values
-            pred_token_idx = self.logits_sampler.sample(outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
+            # NOTE: sampling may cause huge performance downgrade in prefill phase
+            # pred_token_idx = self.logits_sampler.sample(outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
+            pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
             generated_ids = pred_token_idx
             input_ids = pred_token_idx
         else:
             generated_ids = torch.empty((bsz, 0), device=input_ids.device, dtype=input_ids.dtype)
+
         torch.cuda.synchronize()
         end = time.time()
         prefill_time = (end - start)
@@ -99,7 +105,8 @@ class SPD:
 
                 draft_token_prob = draft_outputs.logits[:, -1, :].unsqueeze(1)
                 draft_generated_prob = torch.cat([draft_generated_prob, draft_token_prob], dim=1)
-                draft_next_ids = draft_generated_prob[:, -1, :].argmax(dim=-1).unsqueeze(1)
+                draft_next_ids = self.logits_sampler.sample(draft_generated_prob[:, -1, :]).argmax(dim=-1).unsqueeze(1)
+                # draft_next_ids = draft_generated_prob[:, -1, :].argmax(dim=-1).unsqueeze(1)
                 generated_ids = torch.cat([generated_ids, draft_next_ids], dim=1)
 
             # NOTE: target model parallel genenrate
