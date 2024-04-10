@@ -11,47 +11,6 @@ from modeling_llama import LlamaForCausalLM
 from speculative_inference import SPD
 
 @torch.no_grad()
-def greedy_generate(model, tokenizer, input_ids, past_key_values, max_gen_len):
-    outputs = model(
-        input_ids=input_ids,
-        past_key_values=past_key_values,
-        use_cache=True,
-    )
-    past_key_values = outputs.past_key_values
-    pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-    generated_ids = [pred_token_idx.item()]
-    pos = 0
-    for _ in range(max_gen_len - 1):
-        outputs = model(
-            input_ids=pred_token_idx,
-            past_key_values=past_key_values,
-            use_cache=True,
-        )
-        past_key_values = outputs.past_key_values
-        pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-        generated_ids.append(pred_token_idx.item())
-        generated_text = (
-            tokenizer.decode(
-                generated_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-                spaces_between_special_tokens=False,
-            )
-            .strip()
-            .split(" ")
-        )
-
-        now = len(generated_text) - 1
-        if now > pos:
-            print(" ".join(generated_text[pos:now]), end=" ", flush=True)
-            pos = now
-
-        if pred_token_idx == tokenizer.eos_token_id:
-            break
-    print(" ".join(generated_text[pos:]), flush=True)
-    return past_key_values
-
-@torch.no_grad()
 def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, kv_cache_manager, **kwargs):
     print("start")
     prefill_time = 0
