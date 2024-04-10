@@ -3,7 +3,7 @@ import time
 from tqdm import tqdm
 from typing import List, Optional, Set, Tuple, Union
 from torch.nn import functional as F
-
+from sampler import TopkToppLogitsSampler, StrictAccepter
 
 # TODO: rename
 class SPD:
@@ -11,6 +11,10 @@ class SPD:
         self.draft_model = model
         self.target_model = model
         self.cache_manager = cache_manager
+
+        # TODO: hard code sampler for now
+        self.logits_sampler = TopkToppLogitsSampler(top_k=0, top_p=0.0)
+        self.accepter = StrictAccepter()
 
     def parameters(self):
         return self.target_model.parameters()
@@ -52,7 +56,7 @@ class SPD:
                 use_cache=True,
             )
             past_key_values = outputs.past_key_values
-            pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+            pred_token_idx = self.logits_sampler.sample(outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
             generated_ids = pred_token_idx
             input_ids = pred_token_idx
         else:
@@ -119,22 +123,8 @@ class SPD:
             assert target_generated_prob.shape[1] == draft_generated_prob.shape[1] + 1
             accept_len = 0
             for i in range(max_sample):
-                # have chance to accept if target model do not trust draft model
-                r = torch.rand(1, device = target_generated_ids.device)
-
-                # TODO: multi batch support
-                token_id = generated_ids[:, stable_len + i]
-
-                # NOTE:
-                # if target_pred_token_prob(x) > draft_pred_token_prob(x), have confidence to accept token x
-                # if target_pred_token_prob(x) < draft_pred_token_prob(x), have change to accept token x
-
-                # if r < torch.min(torch.tensor([1], device=r.device), target_generated_prob[:, i, token_id] / draft_generated_prob[:, i, token_id]):
-                # TODO: strict limit some time reject event target and draft is the same model
-                # if target_generated_prob[:, i, token_id] == draft_generated_prob[:, i, token_id]:
-                # TODO: accept in more data science way
-                if target_generated_prob[:, i, :].argmax(-1) == draft_generated_prob[:, i, :].argmax(-1):
-                # if F.softmax(target_generated_prob, dim=-1)[:, i, token_id] == F.softmax(draft_generated_prob, dim=-1)[:, i, token_id]:
+                # TODO: should have chance to accept if target model do not trust draft model
+                if self.accepter.match(target_generated_prob[:, i, :], draft_generated_prob[:, i, :]):
                     accept_len += 1
                 else:
                     # reject

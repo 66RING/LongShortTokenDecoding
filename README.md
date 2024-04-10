@@ -11,6 +11,10 @@
 - [ ] batching support
     - [ ] naive batching
     - [ ] effective batching
+- [ ] sampler
+    - [ ] cache sampler
+    - [ ] logits sampler
+    - [ ] accepter
 - [ ] flash attn support
 - [ ] cache manager design
 
