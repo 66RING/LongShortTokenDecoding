@@ -5,7 +5,12 @@
 ## Roadmap
 
 - [x] streaming llm
-- [ ] speculative + streaming
+- [x] speculative + streaming
+- [ ] key cache position hack
+    - maybe arrange is not the best
+- [ ] batching support
+    - [ ] naive batching
+    - [ ] effective batching
 - [ ] flash attn support
 - [ ] cache manager design
 
