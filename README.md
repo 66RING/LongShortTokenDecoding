@@ -6,12 +6,16 @@
 
 - [x] streaming llm
 - [x] speculative + streaming
-- [ ] key cache position hack
+- [ ] key cache position hacking
     - maybe arrange is not the best
 - [ ] batching support
     - [ ] naive batching
     - [ ] effective batching
-- [ ] sampler
+- [x] naive sampler
+    - [x] cache sampler
+    - [x] logits sampler
+    - [x] accepter
+- [ ] advance sampler
     - [ ] cache sampler
     - [ ] logits sampler
     - [ ] accepter
