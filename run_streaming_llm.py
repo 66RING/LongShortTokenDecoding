@@ -4,14 +4,55 @@ import argparse
 import time
 from transformers import (
     AutoTokenizer,
-    AutoConfig,
-    AutoModelForCausalLM,
 )
-
-from streaming_llm.enable_streaming_llm import enable_streaming_llm
+from cache_manager import SinkCache
+from tqdm import tqdm
+from modeling_llama import LlamaForCausalLM
 
 @torch.no_grad()
-def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, **kwargs):
+def greedy_generate(model, tokenizer, input_ids, past_key_values, max_gen_len):
+    outputs = model(
+        input_ids=input_ids,
+        past_key_values=past_key_values,
+        use_cache=True,
+    )
+    past_key_values = outputs.past_key_values
+    pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+    generated_ids = [pred_token_idx.item()]
+    pos = 0
+    for _ in range(max_gen_len - 1):
+        outputs = model(
+            input_ids=pred_token_idx,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        past_key_values = outputs.past_key_values
+        pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+        generated_ids.append(pred_token_idx.item())
+        generated_text = (
+            tokenizer.decode(
+                generated_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+                spaces_between_special_tokens=False,
+            )
+            .strip()
+            .split(" ")
+        )
+
+        now = len(generated_text) - 1
+        if now > pos:
+            print(" ".join(generated_text[pos:now]), end=" ", flush=True)
+            pos = now
+
+        if pred_token_idx == tokenizer.eos_token_id:
+            break
+    print(" ".join(generated_text[pos:]), flush=True)
+    return past_key_values
+
+@torch.no_grad()
+def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, kv_cache_manager, **kwargs):
+    print("start")
     prefill_time = 0
     decode_time = []
 
@@ -23,19 +64,23 @@ def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, *
         input_ids=input_ids,
         past_key_values=past_key_values,
         use_cache=True,
-        **kwargs,
     )
     torch.cuda.synchronize()
     end = time.time()
     prefill_time = (end - start)
 
     past_key_values = outputs.past_key_values
+    if kv_cache_manager is not None:
+        past_key_values = kv_cache_manager(past_key_values)
     # logits.shape: [bs, seq_len, vocab_size]
     # get the last token and predict the next token idx
     pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
 
     # init generated_ids
     generated_ids = pred_token_idx
+
+    pbar = tqdm(total=max_gen_len - 1)
+    cache_size = 0
 
     for i in range(max_gen_len - 1):
         start = time.time()
@@ -47,12 +92,21 @@ def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, *
             **kwargs,
         )
         past_key_values = outputs.past_key_values
+        if kv_cache_manager is not None:
+            past_key_values = kv_cache_manager(past_key_values)
+        # NOTE: layer 0, key cache
+        cache_size = past_key_values[0][0].shape[2]
         pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
         generated_ids = torch.cat([generated_ids, pred_token_idx], dim=1)
 
         torch.cuda.synchronize()
         end = time.time()
         decode_time.append(end - start)
+
+        pbar.set_postfix(cache_size=cache_size)
+        pbar.update(1)
+
+
 
     # convert batch of generated_ids to text 
     generated_texts = []
@@ -71,13 +125,7 @@ def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, *
 
     return past_key_values, prefill_time, decode_time
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model_name_or_path", type=str, default="meta/Llama-2-7b-chat-hf"
-    )
-    args = parser.parse_args()
-
+def main(args):
     model_name_or_path = args.model_name_or_path
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -87,13 +135,12 @@ def main():
     # NOTE: add pad_token to use padding
     tokenizer.pad_token = tokenizer.eos_token
 
-    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-
-    model = AutoModelForCausalLM.from_pretrained(
+    model = LlamaForCausalLM.from_pretrained(
         model_name_or_path,
-        config=config,
         device_map="auto",
-        attn_implementation="flash_attention_2",
+        # not support flash for now
+        # attn_implementation="flash_attention_2",
+        attn_implementation="eager", # use LlamaAttention to test
         torch_dtype=torch.float16,
         trust_remote_code=True,
     )
@@ -103,10 +150,6 @@ def main():
         else:
             tokenizer.pad_token_id = 0
 
-    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-    params = sum([np.prod(p.size()) for p in model_parameters])
-    print(f"trainable params {params}\n")
-
     model.eval()
 
     past_key_values = None
@@ -114,12 +157,23 @@ def main():
         "One day, Lily met a Shoggoth.",
         "Once upon a time, there was a dragon.",
     ]
-    batch_size = len(prompt)
+
     input_ids = tokenizer(prompt, return_tensors="pt", padding=True).input_ids
     input_ids = input_ids.to(model.device)
 
+    batch_size, seq_len = input_ids.shape
+    # max_gen_len = 1024 * 32
+    max_gen_len = 1024 * 4
+
+    args.recent_size = 4
+    kv_cache_manager = SinkCache(
+        start_size=args.start_size, recent_size=args.recent_size
+    )
+    kv_cache_manager = None
+    print("kv_cache_manager: ", kv_cache_manager)
+
     past_key_values, prefill_time, decode_time = batch_inference(
-        model, tokenizer, input_ids, past_key_values, max_gen_len=128
+        model, tokenizer, input_ids, past_key_values, max_gen_len=max_gen_len, kv_cache_manager=kv_cache_manager
     )
 
     # number of tokens in context / time for processing context * batch size
@@ -138,7 +192,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_name_or_path", type=str, default="meta/Llama-2-7b-chat-hf"
+    )
+    parser.add_argument("--start_size", type=int, default=4)
+    parser.add_argument("--recent_size", type=int, default=2000)
+    parser.add_argument("--enable_streaming", action="store_true")
+    args = parser.parse_args()
+
+    main(args)
 
 
 
