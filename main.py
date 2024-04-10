@@ -131,9 +131,9 @@ def main(args):
 
     batch_size, seq_len = input_ids.shape
     # max_gen_len = 1024 * 32
-    max_gen_len = 128
+    max_gen_len = 1024 * 4
 
-    args.recent_size = 4
+    args.recent_size = 400
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
@@ -141,7 +141,8 @@ def main(args):
     print("using kv_cache_manager: ", kv_cache_manager)
 
     model = SPD(model, cache_manager=kv_cache_manager)
-    generated_ids, prefill_time, decode_time = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=4)
+    with torch.no_grad():
+        generated_ids, prefill_time, decode_time = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=4)
 
     generated_text = (
         tokenizer.decode(

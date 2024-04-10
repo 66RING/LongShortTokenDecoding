@@ -21,9 +21,18 @@
     - [ ] accepter
 - [ ] flash attn support
 - [ ] cache manager design
+- [ ] tree attention
+    - [ ] tree flash attention
+- [ ] target model cache manager?
 
 ## bug killing
 
+- [x] memory larger then no speculative
+    - infer mode: `with torch.no_grad()` or `@torch.no_grad()`
+
+## tips
+
+- how dose medusa do batching?
 
 ## NOTE
 
