@@ -14,7 +14,7 @@ from speculative_inference import SPD
 
 from modeling_llama import LlamaForCausalLM
 from configuration_llama import LlamaConfig
-from viz_utils import draw_line_char
+from viz_utils import draw_line_char, write_csv_line
 
 def test_data_iter(filename, feature):
     with open(filename, 'r', encoding='utf-8') as file:
@@ -62,6 +62,7 @@ def main(args):
 
     max_gen_len = 128
     max_sample = 8
+    name = f"{name}_s{max_sample}"
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
@@ -73,8 +74,9 @@ def main(args):
 
     model = SPD(model, cache_manager=kv_cache_manager)
 
-    all_prefill = []
-    all_decoding = []
+    all_prefill_tps = []
+    all_decoding_tps = []
+    all_decoding_time = []
     all_acc = []
     all_mem_used = []
     x_data = []
@@ -123,8 +125,9 @@ def main(args):
 
         x_data.append(token_len)
         all_mem_used.append(memory_used)
-        all_prefill.append(prefill_tokens_per_second)
-        all_decoding.append(decode_tokens_per_second)
+        all_prefill_tps.append(prefill_tokens_per_second)
+        all_decoding_tps.append(decode_tokens_per_second)
+        all_decoding_time.append(np.sum(decode_time))
         all_acc.append(np.mean(accuracy))
         print(f"token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
@@ -134,11 +137,20 @@ def main(args):
         torch.cuda.empty_cache()
 
     # draw decoding time graph
-    draw_line_char(all_decoding, x_data=x_data,title=f"{name}_tps", show=False, save_path="./tp_decode_time.png", filter=False)
+    draw_line_char(all_decoding_tps, x_data=x_data,title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path="./tp_decode_time.png", filter=False)
     # draw accuracy graph
     draw_line_char(all_acc, x_data=x_data, title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path="./tp_accuracy.png", filter=False)
+    # draw memory used graph
     draw_line_char(all_mem_used, x_data=x_data, title=f"{name}_mem", show=False, save_path="./tp_mem_use.png", filter=False)
 
+    # save raw data as csv
+    with open("tp_data.csv", "w") as file:
+        write_csv_line(file, "token_len", x_data)
+        write_csv_line(file, "prefill_tps", all_prefill_tps)
+        write_csv_line(file, "decode_tps", all_decoding_tps)
+        write_csv_line(file, "decode_time", all_decoding_time)
+        write_csv_line(file, "accuracy", all_acc)
+        write_csv_line(file, "memory_used", all_mem_used)
 
 
 if __name__ == "__main__":

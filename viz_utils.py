@@ -59,3 +59,11 @@ def draw_line_char(y_data: List, x_data: Optional[List] = None, title: Optional[
     if show:
         plt.show()
 
+def write_csv_line(file, label, data: List[List]):
+    print(f"{label},", file=file, end="")
+    for x in data:
+        print(f"{x},", file=file, end="")
+    print(f"\n", file=file, end="")
+
+
+
