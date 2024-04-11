@@ -15,11 +15,12 @@
     - [x] cache sampler
     - [x] logits sampler
     - [x] accepter
+- [x] flash attn support
+- [ ] yarn support
 - [ ] advance sampler
     - [ ] cache sampler
     - [ ] logits sampler
     - [ ] accepter
-- [ ] flash attn support
 - [ ] cache manager design
 - [ ] tree attention
     - [ ] tree flash attention

@@ -101,9 +101,8 @@ def main(args):
     model = LlamaForCausalLM.from_pretrained(
         model_name_or_path,
         device_map="auto",
-        # not support flash for now
-        # attn_implementation="flash_attention_2",
-        attn_implementation="eager", # use LlamaAttention to test
+        attn_implementation="flash_attention_2",
+        # attn_implementation="eager", # use LlamaAttention to test
         torch_dtype=torch.float16,
         trust_remote_code=True,
     )
@@ -138,8 +137,9 @@ def main(args):
     max_sample = 2
 
     # TODO: performance cliff at about 1k in this case
-    args.recent_size = 1024
-    filter = args.recent_size > 1024
+    args.recent_size = 1024000
+    # fileter out out of distribution data
+    filter = False
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
@@ -163,6 +163,7 @@ def main(args):
         .split(" ")
     )
 
+    # TODO: print
     # print(" ".join(generated_text), flush=True)
 
     # number of tokens in context / time for processing context * batch size

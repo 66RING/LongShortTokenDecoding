@@ -527,11 +527,21 @@ class LlamaFlashAttention2(LlamaAttention):
         if past_key_value is not None:
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        # NOTE: pos_emb a single stage, since len of q and len of k may different
+        ### Shift Pos: query pos is min(cache_size, idx)
+        query_states = apply_rotary_pos_emb_single(query_states, cos, sin, position_ids)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        # NOTE: pos_emb a single stage, since len of q and len of k may different
+        ### Shift Pos: key pos is the pos in cache
+        # TODO: key_position hack
+        key_position_ids = torch.arange(kv_seq_len, device=position_ids.device).unsqueeze(0)
+        key_states = apply_rotary_pos_emb_single(key_states, cos, sin, key_position_ids)
+        ###
 
         # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]. We would need to refactor the KV cache
         # to be able to avoid many of these transpose/reshape/view.
