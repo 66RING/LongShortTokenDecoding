@@ -28,12 +28,14 @@ class StablePool:
         return True
 
 
-def draw_line_char(data: List, show: bool = False, save_path: Optional[str] = "./line_char.png"):
-    pool = StablePool(max_len=100, threshold=1.2)
-    pool.prefill(data)
+def draw_line_char(data: List, title: Optional[str], save_path: Optional[str], show: bool = False, filter: bool = True):
+    if filter is True:
+        # filter out out of distribution
+        pool = StablePool(max_len=100, threshold=1.2)
+        pool.prefill(data)
 
-    filtered_data = [x for x in data if pool.visit(x)]
-    data = filtered_data
+        filtered_data = [x for x in data if pool.visit(x)]
+        data = filtered_data
 
     # x axis range
     x_data = range(1, len(data) + 1)
@@ -41,8 +43,10 @@ def draw_line_char(data: List, show: bool = False, save_path: Optional[str] = ".
     plt.figure()
 
     # maker o
-    plt.plot(x_data, data, marker='o')
+    plt.plot(x_data, data, marker='o', markersize=3, linestyle='None')
 
+    if title is not None:
+        plt.title(title)
     plt.xlabel('X-axis')
     plt.ylabel('Y-axis')
 
