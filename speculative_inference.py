@@ -11,6 +11,7 @@ class SPD:
         self.draft_model = model
         self.target_model = model
         self.cache_manager = cache_manager
+        self.device = model.device
 
         # TODO: hard code sampler for now
         # NOTE: sampling may cause huge performance downgrade in prefill phase
