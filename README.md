@@ -16,7 +16,8 @@
     - [x] logits sampler
     - [x] accepter
 - [x] flash attn support
-- [ ] yarn support
+- [x] yarn support
+- [ ] test data generation
 - [ ] advance sampler
     - [ ] cache sampler
     - [ ] logits sampler
@@ -37,6 +38,7 @@
     - [x] decoding tps should lower
         - only happend in LLM, small model may not
     - [x] speculative total time should not be median
+- [ ] transformer version
 
 ## tips
 
