@@ -4,6 +4,7 @@ import argparse
 import time
 from transformers import (
     LlamaTokenizer,
+    AutoTokenizer,
 )
 from cache_manager import SinkCache
 from tqdm import tqdm
@@ -19,10 +20,16 @@ def main(args):
     name = model_name_or_path.split("/")[-1]
 
     # NOTE: not support auto model since model modified
-    tokenizer = LlamaTokenizer.from_pretrained(
-        model_name_or_path,
-        trust_remote_code=True,
-    )
+    try:
+        tokenizer = LlamaTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
+    except:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
     # NOTE: add pad_token to use padding
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -67,7 +74,7 @@ def main(args):
     batch_size, seq_len = input_ids.shape
     # max_gen_len = 1024 * 32
     max_gen_len = 1024 * 8
-    max_sample = 32
+    max_sample = 8
 
     # TODO: performance cliff at about 1k in this case
     args.recent_size = 1024
@@ -101,7 +108,7 @@ def main(args):
     )
 
     # TODO: print
-    # print(" ".join(generated_text), flush=True)
+    print(" ".join(generated_text), flush=True)
 
     # number of tokens in context / time for processing context * batch size
     prefill_tokens_per_second = input_ids.shape[1] / prefill_time * batch_size

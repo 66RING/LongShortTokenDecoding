@@ -28,32 +28,34 @@ class StablePool:
         return True
 
 
-def draw_line_char(data: List, title: Optional[str], save_path: Optional[str], show: bool = False, filter: bool = True):
+def draw_line_char(y_data: List, x_data: Optional[List] = None, title: Optional[str] = None, save_path: Optional[str] = None, show: bool = False, filter: bool = True):
     if filter is True:
         # filter out out of distribution
         pool = StablePool(max_len=100, threshold=1.2)
-        pool.prefill(data)
+        pool.prefill(y_data)
 
-        filtered_data = [x for x in data if pool.visit(x)]
-        data = filtered_data
+        filtered_data = [x for x in y_data if pool.visit(x)]
+        y_data = filtered_data
 
     # x axis range
-    x_data = range(1, len(data) + 1)
+    if x_data is None:
+        x_data = range(1, len(y_data) + 1)
+
+    assert len(x_data) == len(y_data)
 
     plt.figure()
 
     # maker o
-    plt.plot(x_data, data, marker='o', markersize=3, linestyle='None')
+    plt.plot(x_data, y_data, marker='o', markersize=3, linestyle='None')
 
     if title is not None:
         plt.title(title)
     plt.xlabel('X-axis')
     plt.ylabel('Y-axis')
 
-    if show:
-        plt.show()
-
     if save_path is not None:
         plt.savefig(save_path)
 
+    if show:
+        plt.show()
 

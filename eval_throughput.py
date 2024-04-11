@@ -61,7 +61,7 @@ def main(args):
     model.eval()
 
     max_gen_len = 128
-    max_sample = 32
+    max_sample = 8
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
@@ -76,6 +76,8 @@ def main(args):
     all_prefill = []
     all_decoding = []
     all_acc = []
+    all_mem_used = []
+    x_data = []
     for input_text in test_data_iter(args.test_data, "input"):
         past_key_values = None
         input_tokens = tokenizer(input_text,
@@ -88,6 +90,9 @@ def main(args):
         input_tokens = input_tokens['input_ids'].to(model.device)
         print("input token size:", input_tokens.shape)
         batch_size, token_len = input_tokens.shape
+
+        if token_len > args.max_token_len:
+            break
 
         total_time = time.time()
         generated_ids, prefill_time, decode_time, accuracy = model.generate(input_tokens, past_key_values, max_gen_len=max_gen_len, max_sample=max_sample)
@@ -113,21 +118,26 @@ def main(args):
         # 1 second / median time per token in seconds * batch size
         decode_tokens_per_second = batch_size * max_gen_len / np.sum(decode_time)
 
-        all_prefill.append((token_len, prefill_tokens_per_second))
-        all_decoding.append((token_len, decode_tokens_per_second))
-        all_acc.append(np.mean(accuracy))
-        print(token_len, prefill_tokens_per_second, decode_tokens_per_second, np.mean(accuracy))
+        device = next(model.parameters()).device
+        memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
 
+        x_data.append(token_len)
+        all_mem_used.append(memory_used)
+        all_prefill.append(prefill_tokens_per_second)
+        all_decoding.append(decode_tokens_per_second)
+        all_acc.append(np.mean(accuracy))
+        print(f"token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
         generated_ids = None
         input_tokens = None
         gc.collect()
         torch.cuda.empty_cache()
 
-    # # draw decoding time graph
-    # draw_line_char(decode_time, title=f"{name}_tps, total_time={total_time:.2f}", show=False, save_path="./decode_time.png", filter=filter)
-    # # draw accuracy graph
-    # draw_line_char(accuracy, title=f"{name}_acc, mean={np.mean(accuracy):.2f}", show=False, save_path="./accuracy.png", filter=False)
+    # draw decoding time graph
+    draw_line_char(all_decoding, x_data=x_data,title=f"{name}_tps", show=False, save_path="./tp_decode_time.png", filter=False)
+    # draw accuracy graph
+    draw_line_char(all_acc, x_data=x_data, title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path="./tp_accuracy.png", filter=False)
+    draw_line_char(all_mem_used, x_data=x_data, title=f"{name}_mem", show=False, save_path="./tp_mem_use.png", filter=False)
 
 
 
@@ -138,7 +148,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--test_data", type=str, required=True)
     parser.add_argument("--start_size", type=int, default=4)
-    parser.add_argument("--recent_size", type=int, default=1024)
+    parser.add_argument("--recent_size", type=int, default=1024 * 4)
+    parser.add_argument("--max_token_len", type=int, default=64 * 1024)
     args = parser.parse_args()
 
     main(args)
