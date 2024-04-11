@@ -17,7 +17,7 @@
     - [x] accepter
 - [x] flash attn support
 - [x] yarn support
-- [ ] test data generation
+- [x] test data generation
 - [ ] advance sampler
     - [ ] cache sampler
     - [ ] logits sampler

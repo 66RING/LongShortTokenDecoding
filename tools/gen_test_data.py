@@ -34,6 +34,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, required=True, help="output file path.")
     parser.add_argument("--max_context_length", type=int, default=128 * 1024, help="max context length.")
     parser.add_argument("--scope", type=int, default=16, help="max context length.")
-    parser.add_argument("--scaler", type=float, default=4, help="character number to token number scaler.")
+    parser.add_argument("--scaler", type=float, default=2, help="character number to token number scaler.")
     args = parser.parse_args()
     main(args)
