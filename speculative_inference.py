@@ -173,7 +173,7 @@ class SPD:
             pbar.update(accept_len+1)
 
             end = time.time()
-            decode_time.append(end - start)
+            decode_time.extend([(end - start)/(accept_len + 1)] * (accept_len + 1))
 
         return generated_ids, prefill_time, decode_time
 

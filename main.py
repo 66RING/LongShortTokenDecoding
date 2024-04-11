@@ -10,6 +10,8 @@ from tqdm import tqdm
 from modeling_llama import LlamaForCausalLM
 from speculative_inference import SPD
 
+from viz_utils import draw_line_char
+
 @torch.no_grad()
 def batch_inference(model, tokenizer, input_ids, past_key_values, max_gen_len, kv_cache_manager, **kwargs):
     print("start")
@@ -173,6 +175,7 @@ def main(args):
     print(f" ** Speed (Prefill): {prefill_tokens_per_second:.2f} tokens/second")
     print(f" ** Speed (Decode): {decode_tokens_per_second:.2f} tokens/second")
     print(f" ** Max Memory (VRAM): {memory_used:.2f} GB ({memory_pct:.2f}%)")
+    draw_line_char(decode_time, show=False, save_path="./decode_time.png")
 
 
 
