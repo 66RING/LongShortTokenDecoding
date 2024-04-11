@@ -134,11 +134,11 @@ def main(args):
 
     batch_size, seq_len = input_ids.shape
     # max_gen_len = 1024 * 32
-    max_gen_len = 1024 * 8
+    max_gen_len = 1024 * 4
     max_sample = 2
 
     # TODO: performance cliff at about 1k in this case
-    args.recent_size = 102400
+    args.recent_size = 1024
     filter = args.recent_size > 1024
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
@@ -148,7 +148,7 @@ def main(args):
 
     model = SPD(model, cache_manager=kv_cache_manager)
     total_time = time.time()
-    generated_ids, prefill_time, decode_time = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=max_sample)
+    generated_ids, prefill_time, decode_time, accuracy = model.generate(input_ids, past_key_values, max_gen_len=max_gen_len, max_sample=max_sample)
     torch.cuda.synchronize()
     total_time = time.time() - total_time
 
@@ -163,7 +163,7 @@ def main(args):
         .split(" ")
     )
 
-    print(" ".join(generated_text), flush=True)
+    # print(" ".join(generated_text), flush=True)
 
     # number of tokens in context / time for processing context * batch size
     prefill_tokens_per_second = input_ids.shape[1] / prefill_time * batch_size
@@ -178,7 +178,11 @@ def main(args):
     print(f" ** Speed (Prefill): {prefill_tokens_per_second:.2f} tokens/second")
     print(f" ** Speed (Decode): {decode_tokens_per_second:.2f} tokens/second")
     print(f" ** Max Memory (VRAM): {memory_used:.2f} GB ({memory_pct:.2f}%)")
-    draw_line_char(decode_time, title=name, show=False, save_path="./decode_time.png", filter=filter)
+
+    # draw decoding time graph
+    draw_line_char(decode_time, title=f"{name}_tps", show=False, save_path="./decode_time.png", filter=filter)
+    # draw accuracy graph
+    draw_line_char(accuracy, title=f"{name}_acc, mean={np.mean(accuracy):.2f}", show=False, save_path="./accuracy.png", filter=False)
 
 
 

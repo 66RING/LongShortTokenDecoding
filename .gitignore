@@ -3,3 +3,5 @@ streaming_llm/pos_shift/__pycache__
 .vscode
 __pycache__
 ignore/
+decode_time.png
+accuracy.png

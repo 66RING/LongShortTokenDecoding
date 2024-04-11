@@ -30,7 +30,7 @@ class SPD:
         max_gen_len: int,
         max_sample: int = 4,
     # TODO: format return
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, float, List[float], List[float]]:
         '''
         speculative inference
         genenrate next N token without loss return
@@ -43,9 +43,15 @@ class SPD:
         2. verify:
             target_model take the output of draft_model as input
             verify each token
+        Return:
+            generated_ids: (bs, seqlen), generated tokens
+            prefill_time: float, prefill time
+            decode_time: List[float], decode time for each token
+            accuracy: List[float], accept rate for each iteration
         '''
         prefill_time = 0
         decode_time = []
+        accuracy = []
 
         bsz, input_seqlen = input_ids.shape
 
@@ -169,11 +175,14 @@ class SPD:
             draft_next_ids = generated_ids[:, -1].unsqueeze(1)
             past_key_values = past_key_values_trimmed
             generated_len += accept_len + 1
-            pbar.set_postfix({"cache_size": cache_size, "acc": f"{accept_len/max_sample:.2f}"})
-            pbar.update(accept_len+1)
 
             end = time.time()
             decode_time.extend([(end - start)/(accept_len + 1)] * (accept_len + 1))
 
-        return generated_ids, prefill_time, decode_time
+            acc = accept_len/max_sample
+            accuracy.append(acc)
+            pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}"})
+            pbar.update(accept_len+1)
+
+        return generated_ids, prefill_time, decode_time, accuracy
 
