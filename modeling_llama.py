@@ -1218,6 +1218,10 @@ class LlamaModel(LlamaPreTrainedModel):
                     use_cache=use_cache,
                 )
 
+            # NOTE:
+            # layer_outputs[0]: hidden_states
+            # layer_outputs[1]: output_attentions
+            # next_decoder_cache = layer_outputs[2 if output_attentions else 1]
             hidden_states = layer_outputs[0]
 
             if use_cache:
