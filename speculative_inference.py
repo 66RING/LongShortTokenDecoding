@@ -5,7 +5,10 @@ from typing import List, Optional, Set, Tuple, Union
 from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
 
+
+
 # TODO: rename
+# Long short token decoding
 class SPD:
     def __init__(self, model, cache_manager):
         self.draft_model = model
@@ -175,7 +178,7 @@ class SPD:
             target_next_ids = generated_ids[:, -1].unsqueeze(1)
             draft_next_ids = generated_ids[:, -1].unsqueeze(1)
             past_key_values = past_key_values_trimmed
-            generated_len += accept_len + 1
+            generated_len = generated_ids.shape[1]
 
             end = time.time()
             decode_time.extend([(end - start)/(accept_len + 1)] * (accept_len + 1))
@@ -186,4 +189,5 @@ class SPD:
             pbar.update(accept_len+1)
 
         return generated_ids, prefill_time, decode_time, accuracy
+
 

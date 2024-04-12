@@ -122,10 +122,12 @@ def main(args):
 
             # print(" ".join(generated_text), flush=True)
 
+            generated_len = generated_ids.shape[1]
+
             # number of tokens in context / time for processing context * batch size
             prefill_tokens_per_second = token_len / prefill_time * batch_size
             # 1 second / median time per token in seconds * batch size
-            decode_tokens_per_second = batch_size * max_gen_len / np.sum(decode_time)
+            decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
 
             device = next(model.parameters()).device
             memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
