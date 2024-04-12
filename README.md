@@ -20,6 +20,7 @@
 - [x] test data generation
 - [ ] advance sampler
     - [ ] cache sampler
+        - [x] Long short token cache sampler
     - [ ] logits sampler
     - [ ] accepter
 - [ ] cache manager design
@@ -29,6 +30,12 @@
 - [ ] ppl test
     1. reproduce streaming llm
     2. test model performence
+
+## tree attention
+
+- tree forward
+- top k generation
+- batching
 
 ## bug killing
 
