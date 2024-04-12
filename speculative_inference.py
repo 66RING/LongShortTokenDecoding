@@ -162,7 +162,8 @@ class SPD:
             # past_key_values = [layer_num,..][k, v](batch, head, seq, hidden_dim)
             past_key_values_trimmed = []
             assert past_key_values
-            end_pos = input_seqlen + generated_ids.shape[1]
+            # NOTE: -1 to drop prob token, since append target_last_accept to generated_ids
+            end_pos = input_seqlen + generated_ids.shape[1] - 1
             # TODO: support **LLAMA** kvcache truncte only for now
             # k, v (batch, head, seq, hidden_dim)
             for kv in past_key_values:
@@ -183,7 +184,7 @@ class SPD:
             end = time.time()
             decode_time.extend([(end - start)/(accept_len + 1)] * (accept_len + 1))
 
-            acc = accept_len/max_sample
+            acc = accept_len/max_sample if max_sample != 0 else 1
             accuracy.append(acc)
             pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}"})
             pbar.update(accept_len+1)
