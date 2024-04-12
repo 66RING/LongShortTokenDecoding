@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from typing import List, Optional
 
 def slice1d(x, start, end):
     return x[:, start:end, ...]
@@ -179,6 +180,30 @@ class LongShortTokenCache:
         return new_past_key_values
 
 
+# test
+def test_long_short_token_cache():
+    unit_list = [1000000]
+    gap = 4
+    sink = 4
+    k_seq_dim = 2
+    v_seq_dim = 2
 
+    cache = LongShortTokenCache(unit_list=unit_list, gap=gap, sink=sink, k_seq_dim=k_seq_dim, v_seq_dim=v_seq_dim)
+
+    cache_len = 20
+    past_key_values = [
+        [
+            torch.arange(0, cache_len).reshape(1, 1, cache_len, 1),
+            torch.arange(0, cache_len).reshape(1, 1, cache_len, 1),
+        ]
+    ]
+
+    new_past_key_values = cache(past_key_values)
+
+    for i, (new_k, new_v) in enumerate(new_past_key_values):
+        print(f"Layer {i}:")
+        print(f"New Key Shape: {new_k.shape}")
+        print(f"New Value Shape: {new_v.shape}")
+        print(new_k)
 
 
