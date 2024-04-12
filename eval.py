@@ -7,6 +7,7 @@ import sys
 import gc
 from transformers import (
     LlamaTokenizer,
+    AutoTokenizer,
 )
 from cache_manager import SinkCache
 from tqdm import tqdm
@@ -33,10 +34,17 @@ def main(args):
     print(model_name_or_path)
 
     # NOTE: not support auto model since model modified
-    tokenizer = LlamaTokenizer.from_pretrained(
-        model_name_or_path,
-        trust_remote_code=True,
-    )
+    try:
+        tokenizer = LlamaTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
+    except:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
+
     # NOTE: add pad_token to use padding
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -96,7 +104,7 @@ def main(args):
         input_text = sample[args.feature]
         input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to(model.device)
 
-        for seqlen in range(4096, args.max_token_len + 1, 4096):
+        for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
             # (bs, seqlen)
             input_token = input_ids[:, :seqlen]
 
@@ -105,6 +113,10 @@ def main(args):
 
             total_time = time.time()
             past_key_values = None
+            # warmup
+            _ = model.generate(input_token, None, max_gen_len=args.warmup_step, max_sample=max_sample)
+
+            # generation start
             generated_ids, prefill_time, decode_time, accuracy = model.generate(input_token, past_key_values, max_gen_len=max_gen_len, max_sample=max_sample)
             torch.cuda.synchronize()
             total_time = time.time() - total_time
@@ -191,7 +203,10 @@ if __name__ == "__main__":
     parser.add_argument("--start_size", type=int, default=4)
     parser.add_argument("--recent_size", type=int, default=1024 * 4)
     parser.add_argument("--max_sample", type=int, default=8)
-    parser.add_argument("--max_token_len", type=int, default=8 * 1024)
+    parser.add_argument("--max_token_len", type=int, default=64 * 1024)
+    parser.add_argument("--min_token_len", type=int, default=4 * 1024)
+    parser.add_argument("--step_token_len", type=int, default=4 * 1024)
+    parser.add_argument("--warmup_step", type=int, default=10)
     args = parser.parse_args()
 
     main(args)
