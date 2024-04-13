@@ -10,6 +10,7 @@ class Base:
     def parameters(self):
         return self.model.parameters()
 
+    @torch.no_grad()
     def generate(self, input_ids, past_key_values, max_gen_len, **kwargs):
         model = self.model
         prefill_time = 0
