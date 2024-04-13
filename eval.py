@@ -97,7 +97,7 @@ def main(args):
     max_gen_len = 128
     # k
     max_sample = args.max_sample
-    name = f"{name}_s{max_sample}"
+    name = f"{name}_s{max_sample}_cache_{args.recent_size//1024}k"
     kv_cache_manager = SinkCache(
         start_size=args.start_size, recent_size=args.recent_size
     )
