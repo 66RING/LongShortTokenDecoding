@@ -5,6 +5,7 @@ import time
 import json
 import sys
 import gc
+from pathlib import Path
 from transformers import (
     LlamaTokenizer,
     AutoTokenizer,
@@ -12,11 +13,15 @@ from transformers import (
 from cache_manager import SinkCache
 from tqdm import tqdm
 from datasets import load_dataset
-from speculative_inference import SPD
 
 from modeling_llama import LlamaForCausalLM
 from configuration_llama import LlamaConfig
 from viz_utils import draw_line_char, write_csv_line
+
+from speculative_inference import SPD
+from baseline.modeling_eagle import EAGLE
+from baseline.modeling_baseline import Base
+
 
 def test_data_iter(filename, feature):
     with open(filename, 'r', encoding='utf-8') as file:
@@ -32,6 +37,10 @@ def main(args):
     model_name_or_path = args.model_name_or_path
     name = model_name_or_path.split("/")[-1]
     print(model_name_or_path)
+
+    args.output_dir = args.output_dir + f"/{name}"
+    path = Path(args.output_dir)
+    path.mkdir(parents=True, exist_ok=True)
 
     # NOTE: not support auto model since model modified
     try:
@@ -50,17 +59,33 @@ def main(args):
 
     config = LlamaConfig.from_pretrained(
         model_name_or_path,
-        attn_implementation="flash_attention_2",
         trust_remote_code=True,
     )
-    model = LlamaForCausalLM.from_pretrained(
-        model_name_or_path,
-        config=config,
-        device_map="auto",
-        # attn_implementation="eager", # use LlamaAttention to test
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-    )
+    try:
+        print("try use_safetensors")
+        model = LlamaForCausalLM.from_pretrained(
+            model_name_or_path,
+            config=config,
+            device_map="auto",
+            # attn_implementation="eager", # use LlamaAttention to test
+            attn_implementation="flash_attention_2", # eagle not support flash attention yet
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            use_safetensors=True,
+        )
+    except:
+        print("not use_safetensors")
+        model = LlamaForCausalLM.from_pretrained(
+            model_name_or_path,
+            config=config,
+            device_map="auto",
+            # attn_implementation="eager", # use LlamaAttention to test
+            attn_implementation="flash_attention_2", # eagle not support flash attention yet
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            use_safetensors=False,
+        )
+
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token_id is not None:
             tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -82,7 +107,15 @@ def main(args):
     print(f"cache_size: {args.start_size + args.recent_size}")
     print(f"kv_cache_manager: {kv_cache_manager}")
 
-    model = SPD(model, cache_manager=kv_cache_manager)
+    print(f"======== infer type: {args.infer_type} ========")
+    if args.infer_type == "lstd":
+        model = SPD(model, cache_manager=kv_cache_manager)
+    elif args.infer_type == "base":
+        model = Base(model)
+    elif args.infer_type == "eagle":
+        model = EAGLE(model, args.eagle_path)
+    else:
+        raise ValueError(f"Invalid infer_type: {args.infer_type}")
 
     try:
         dataset = load_dataset(args.test_data, split="train")
@@ -102,11 +135,17 @@ def main(args):
     x_data = [[] for _ in range(max_test_count)]
     for sample in dataset:
         input_text = sample[args.feature]
-        input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to(model.device)
+        tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
+        input_ids = tokenized.input_ids.to(model.device)
+        mask = tokenized.attention_mask.to(model.device)
 
-        for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
+        # for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
+        for seqlen in [4*1024, 8*1024, 16*1024, 32*1024, 64*1024, 100*1024]:
+            if args.max_token_len < seqlen:
+                break
             # (bs, seqlen)
             input_token = input_ids[:, :seqlen]
+            attention_mask = mask[:, :seqlen]
 
             print("input token size:", input_token.shape)
             batch_size, token_len = input_token.shape
@@ -114,31 +153,46 @@ def main(args):
             total_time = time.time()
             past_key_values = None
             # warmup
-            _ = model.generate(input_token, None, max_gen_len=args.warmup_step, max_sample=max_sample)
+            model.generate(
+                    input_ids=input_token,
+                    attention_mask=attention_mask,
+                    past_key_values=None,
+                    max_gen_len=args.warmup_step,
+                    max_sample=max_sample)
 
             # generation start
-            generated_ids, prefill_time, decode_time, accuracy = model.generate(input_token, past_key_values, max_gen_len=max_gen_len, max_sample=max_sample)
+            generated_ids, prefill_time, decode_time, accuracy = model.generate(
+                    input_ids=input_token,
+                    attention_mask=attention_mask,
+                    past_key_values=None,
+                    max_gen_len=max_gen_len,
+                    max_sample=max_sample)
             torch.cuda.synchronize()
             total_time = time.time() - total_time
 
-            # generated_text = (
-            #     tokenizer.decode(
-            #         generated_ids[0],
-            #         skip_special_tokens=True,
-            #         clean_up_tokenization_spaces=True,
-            #         spaces_between_special_tokens=False,
-            #     )
-            #     .strip()
-            #     .split(" ")
-            # )
+            if args.print:
+                generated_text = (
+                    tokenizer.decode(
+                        generated_ids[0],
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=True,
+                        spaces_between_special_tokens=False,
+                    )
+                    .strip()
+                    .split(" ")
+                )
 
-            # print(" ".join(generated_text), flush=True)
+                print(" ".join(generated_text), flush=True)
 
-            generated_len = generated_ids.shape[1]
+            if isinstance(generated_ids, list):
+                generated_len = len(generated_ids)
+            else:
+                generated_len = generated_ids.shape[1]
 
             # number of tokens in context / time for processing context * batch size
             prefill_tokens_per_second = token_len / prefill_time * batch_size
             # 1 second / median time per token in seconds * batch size
+            # NOTE: second per token
             decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
 
             device = next(model.parameters()).device
@@ -173,17 +227,17 @@ def main(args):
     plot_ave_all_acc = [np.mean(list(row)) for row in zip(*all_acc)]
 
     # draw decoding time graph
-    draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"./tp_decode_time_s{max_sample}_ds_{dataset_name}.png", filter=False)
+    draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_decode_time_{name}_ds_{dataset_name}.png", filter=False)
     # draw accuracy graph
-    draw_line_char(plot_all_acc, x_data=x_data[0], title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"./tp_accuracy_s{max_sample}_ds_{dataset_name}.png", filter=False)
+    draw_line_char(plot_all_acc, x_data=x_data[0], title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_accuracy_{name}_ds_{dataset_name}.png", filter=False)
     # draw memory used graph
-    draw_line_char(plot_all_mem_used, x_data=x_data[0], title=f"{name}_mem", show=False, save_path=f"./tp_mem_use_s{max_sample}_ds_{dataset_name}.png", filter=False)
+    draw_line_char(plot_all_mem_used, x_data=x_data[0], title=f"{name}_mem", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_mem_use_{name}_ds_{dataset_name}.png", filter=False)
     # draw ave graph
-    draw_line_char(plot_ave_all_decoding_tps, x_data=x_data[0],title=f"{name}_ave_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"./tp_ave_decode_time_s{max_sample}_ds_{dataset_name}.png", filter=False)
-    draw_line_char(plot_ave_all_acc, x_data=x_data[0], title=f"{name}_ave_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"./tp_ave_accuracy_s{max_sample}_ds_{dataset_name}.png", filter=False)
+    draw_line_char(plot_ave_all_decoding_tps, x_data=x_data[0],title=f"{name}_ave_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_decode_time_{name}_ds_{dataset_name}.png", filter=False)
+    draw_line_char(plot_ave_all_acc, x_data=x_data[0], title=f"{name}_ave_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_accuracy_{name}_ds_{dataset_name}.png", filter=False)
 
     # save raw data as csv
-    with open(f"tp_data_s{max_sample}_ds_{dataset_name}.csv", "w") as file:
+    with open(f"{args.output_dir}/{args.infer_type}_tp_data_{name}_ds_{dataset_name}.csv", "w") as file:
         for i in range(max_test_count):
             write_csv_line(file, "token_len", x_data[i])
             write_csv_line(file, "prefill_tps", all_prefill_tps[i])
@@ -207,6 +261,10 @@ if __name__ == "__main__":
     parser.add_argument("--min_token_len", type=int, default=4 * 1024)
     parser.add_argument("--step_token_len", type=int, default=4 * 1024)
     parser.add_argument("--warmup_step", type=int, default=10)
+    parser.add_argument("--print", action="store_true")
+    parser.add_argument("--output_dir", type=str, default="./output")
+    parser.add_argument("--infer_type", type=str, default="lstd", help="lstd, base or eagle")
+    parser.add_argument("--eagle_path", type=str, help="Eagle head path for eagle inference.")
     args = parser.parse_args()
 
     main(args)

@@ -33,6 +33,8 @@ class SPD:
         past_key_values: torch.Tensor,
         max_gen_len: int,
         max_sample: int = 4,
+        attention_mask,
+        **kwargs,
     # TODO: format return
     ) -> Tuple[torch.Tensor, float, List[float], List[float]]:
         '''
@@ -88,6 +90,7 @@ class SPD:
         pbar = tqdm(total=max_gen_len)
         cache_size = 0
         while generated_len < max_gen_len:
+            torch.cuda.synchronize()
             start = time.time()
             stable_len = generated_ids.shape[1]
 
@@ -181,6 +184,7 @@ class SPD:
             past_key_values = past_key_values_trimmed
             generated_len = generated_ids.shape[1]
 
+            torch.cuda.synchronize()
             end = time.time()
             decode_time.extend([(end - start)/(accept_len + 1)] * (accept_len + 1))
 

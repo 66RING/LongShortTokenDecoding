@@ -6,3 +6,4 @@ ignore/
 decode_time.png
 accuracy.png
 test_data.jsonl
+output/

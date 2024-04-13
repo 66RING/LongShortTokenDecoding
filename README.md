@@ -45,6 +45,9 @@
     - [x] decoding tps should lower
         - only happend in LLM, small model may not
     - [x] speculative total time should not be median
+- [x] some cache and full cache generation not match
+    1. wrong `end_pos`, since `generated_ids` have include the prob one. so need to -1
+    2. `[:outrange]` may not crash in python
 - [ ] transformer version
 
 ## tips

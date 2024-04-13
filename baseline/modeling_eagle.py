@@ -1741,6 +1741,7 @@ class EAGLE:
         pbar = tqdm(total=max_gen_len)
 
         for idx in range(max_length):
+            torch.cuda.synchronize()
             start = time.time()
 
             # NOTE: 根据tree attention生成的logits挑选候选人

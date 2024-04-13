@@ -11,7 +11,14 @@ class Base:
         return self.model.parameters()
 
     @torch.no_grad()
-    def generate(self, input_ids, past_key_values, max_gen_len, **kwargs):
+    def generate(
+            self,
+            input_ids,
+            past_key_values,
+            max_gen_len,
+            attention_mask,
+            **kwargs
+        ):
         model = self.model
         prefill_time = 0
         decode_time = []
@@ -38,6 +45,7 @@ class Base:
         generated_ids = pred_token_idx
 
         for i in tqdm(range(max_gen_len - 1)):
+            torch.cuda.synchronize()
             start = time.time()
             # decoding phase, generate next token with last token and kv cache
             outputs = model(
