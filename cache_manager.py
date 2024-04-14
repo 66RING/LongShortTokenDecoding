@@ -207,3 +207,106 @@ def test_long_short_token_cache():
         print(new_k)
 
 
+class DynamicCache:
+    def __init__(self,
+            cache_unit_range,
+            kick=3,
+            unit=256,
+            start_size=4,
+            slow_up_unum=4,
+            threshold=0.8,
+        ):
+        '''
+        TODO: review. max cache_size, cache_range[1], better to near the performance cliff
+        TODO: hard code config for Yi for now.
+        '''
+        assert cache_unit_range[0] < cache_unit_range[1]
+
+        # unit of cache size
+        self.unit = unit
+        self.cache_max_size = cache_unit_range[1] * unit
+        self.cache_min_size = cache_unit_range[0] * unit
+
+        # start with max cache size
+        self.recent_size = self.cache_max_size
+        # attention sink
+        self.start_size = start_size
+        # accuracy threshold
+        self.threshold = threshold
+        # kick off when counter reaches kick
+        self.kick_cnt = 0
+        self.kick = kick
+        # current cache size
+        self.cache_size = self.start_size + self.recent_size
+        self.slow_up_size = self.cache_size - slow_up_unum * unit
+        self.quick_up_cnt = 0
+
+        # TODO: hard coded 2
+        self.k_seq_dim = 2
+        self.v_seq_dim = 2
+        self.k_slice = DIM_TO_SLICE[self.k_seq_dim]
+        self.v_slice = DIM_TO_SLICE[self.v_seq_dim]
+        # acc accumulator
+        self.acc = 1
+
+        # TODO: for debug
+        self.size_list = []
+
+    # TCP like block avoiding algorithm
+    def step(self, acc):
+        assert self.cache_size == self.start_size + self.recent_size
+        self.kick_cnt += 1
+        # TODO:
+        self.acc = (self.acc + acc) / 2
+        if self.kick_cnt > self.kick:
+            self.kick_cnt = 0
+
+            if acc < self.threshold:
+                # larger cache not working well, reduce cache size
+                self.recent_size = max((self.recent_size + self.cache_min_size) // 2, self.cache_min_size)
+            else:
+                # larger cache may keep accuracy, increase cache size
+                if self.cache_size < self.slow_up_size:
+                    self.recent_size = min(self.cache_size + self.unit * (1 << self.quick_up_cnt), self.cache_max_size)
+                    self.quick_up_cnt = min(self.quick_up_cnt + 1, 4)
+                else:
+                    self.quick_up_cnt = 0
+                    self.recent_size = min(self.cache_size + self.unit, self.cache_max_size)
+            self.cache_size = self.start_size + self.recent_size
+
+            # TODO: debug only
+            self.size_list.append(self.cache_size)
+
+    def __call__(self, past_key_values):
+        '''
+        past_key_values = [layer_num,..][k, v](batch, head, seq, hidden_dim)
+        '''
+
+        if past_key_values is None:
+            return None
+        seq_len = past_key_values[0][0].size(self.k_seq_dim)
+        if seq_len <= self.cache_size:
+            return past_key_values
+
+        return [
+            [
+                torch.cat(
+                    [
+                        self.k_slice(k, 0, self.start_size),
+                        self.k_slice(k, seq_len - self.recent_size, seq_len),
+                    ],
+                    dim=self.k_seq_dim,
+                ),
+                torch.cat(
+                    [
+                        self.v_slice(v, 0, self.start_size),
+                        self.v_slice(v, seq_len - self.recent_size, seq_len),
+                    ],
+                    dim=self.v_seq_dim,
+                ),
+            ]
+            for k, v in past_key_values
+        ]
+
+
+
