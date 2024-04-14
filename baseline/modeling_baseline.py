@@ -3,9 +3,10 @@ import time
 from tqdm import tqdm
 
 class Base:
-    def __init__(self, model):
+    def __init__(self, model, tokenizer):
         self.model = model
         self.device = model.device
+        self.tokenizer = tokenizer
 
     def parameters(self):
         return self.model.parameters()
@@ -16,7 +17,7 @@ class Base:
             input_ids,
             past_key_values,
             max_gen_len,
-            attention_mask,
+            attention_mask = None,
             **kwargs
         ):
         model = self.model
@@ -60,6 +61,8 @@ class Base:
             torch.cuda.synchronize()
             end = time.time()
             decode_time.append(end - start)
+            if self.tokenizer.eos_token_id in pred_token_idx:
+                break
 
         return generated_ids, prefill_time, decode_time, [1 for _ in decode_time]
 

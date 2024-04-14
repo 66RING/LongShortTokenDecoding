@@ -4,17 +4,19 @@ from tqdm import tqdm
 from typing import List, Optional, Set, Tuple, Union
 from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
+from cache_manager import DynamicCache
 
 
 
 # TODO: rename
 # Long short token decoding
 class SPD:
-    def __init__(self, model, cache_manager):
+    def __init__(self, model, tokenizer, cache_manager):
         self.draft_model = model
         self.target_model = model
         self.cache_manager = cache_manager
         self.device = model.device
+        self.tokenizer = tokenizer
 
         # TODO: hard code sampler for now
         # NOTE: sampling may cause huge performance downgrade in prefill phase
@@ -33,7 +35,7 @@ class SPD:
         past_key_values: torch.Tensor,
         max_gen_len: int,
         max_sample: int = 4,
-        attention_mask,
+        attention_mask = None,
         **kwargs,
     # TODO: format return
     ) -> Tuple[torch.Tensor, float, List[float], List[float]]:
@@ -89,10 +91,14 @@ class SPD:
         generated_len = 0
         pbar = tqdm(total=max_gen_len)
         cache_size = 0
+        acc = 1.0
         while generated_len < max_gen_len:
             torch.cuda.synchronize()
             start = time.time()
             stable_len = generated_ids.shape[1]
+
+            if isinstance(self.cache_manager, DynamicCache):
+                self.cache_manager.step(acc)
 
             # create empty draft prob
             draft_generated_prob = torch.empty((bsz, 0, self.draft_model.config.vocab_size), device=input_ids.device, dtype=input_ids.dtype)
@@ -192,6 +198,10 @@ class SPD:
             accuracy.append(acc)
             pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}"})
             pbar.update(accept_len+1)
+
+            if self.tokenizer.eos_token_id in generated_ids[-(max_sample+1):]:
+                break
+
 
         return generated_ids, prefill_time, decode_time, accuracy
 
