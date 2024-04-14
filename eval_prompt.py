@@ -162,21 +162,24 @@ def main(args):
     all_mem_used = [[] for _ in range(max_test_count)]
     x_data = [[] for _ in range(max_test_count)]
     for sample in dataset:
-        input_text = sample[args.feature]
+        # TODO: hard code for dataset for now
+        context = sample["context"]
+        input = sample["input"]
+        input_text = f"{context}\n{input}"
+
         tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
         input_ids = tokenized.input_ids.to(model.device)
         mask = tokenized.attention_mask.to(model.device)
+        if input_ids.shape[1] > args.max_token_len:
+            continue
 
-        # for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
-        for seqlen in [4*1024, 8*1024, 16*1024, 32*1024, 64*1024, 100*1024]:
-            if args.max_token_len < seqlen:
-                break
+        for _ in [0]:
 
             # TODO: insert prompt
 
             # (bs, seqlen)
-            input_token = input_ids[:, :seqlen]
-            attention_mask = mask[:, :seqlen]
+            input_token = input_ids
+            attention_mask = mask
 
             print("input token size:", input_token.shape)
             batch_size, token_len = input_token.shape
@@ -254,7 +257,7 @@ def main(args):
             all_decoding_tps[cnt].append(decode_tokens_per_second)
             all_decoding_time[cnt].append(np.sum(decode_time))
             all_acc[cnt].append(np.mean(accuracy))
-            print(f"token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+            print(f"{cnt}: token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
             generated_ids = None
             input_token = None
@@ -276,25 +279,25 @@ def main(args):
     plot_ave_all_decoding_tps = [np.mean(list(row)) for row in zip(*all_decoding_tps)]
     plot_ave_all_acc = [np.mean(list(row)) for row in zip(*all_acc)]
 
-    # draw decoding time graph
-    draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_decode_time_{name}_ds_{dataset_name}.png", filter=False)
-    # draw accuracy graph
-    draw_line_char(plot_all_acc, x_data=x_data[0], title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_accuracy_{name}_ds_{dataset_name}.png", filter=False)
-    # draw memory used graph
-    draw_line_char(plot_all_mem_used, x_data=x_data[0], title=f"{name}_mem", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_mem_use_{name}_ds_{dataset_name}.png", filter=False)
-    # draw ave graph
-    draw_line_char(plot_ave_all_decoding_tps, x_data=x_data[0],title=f"{name}_ave_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_decode_time_{name}_ds_{dataset_name}.png", filter=False)
-    draw_line_char(plot_ave_all_acc, x_data=x_data[0], title=f"{name}_ave_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_accuracy_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw decoding time graph
+    # draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_decode_time_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw accuracy graph
+    # draw_line_char(plot_all_acc, x_data=x_data[0], title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_accuracy_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw memory used graph
+    # draw_line_char(plot_all_mem_used, x_data=x_data[0], title=f"{name}_mem", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_mem_use_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw ave graph
+    # draw_line_char(plot_ave_all_decoding_tps, x_data=x_data[0],title=f"{name}_ave_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_decode_time_{name}_ds_{dataset_name}.png", filter=False)
+    # draw_line_char(plot_ave_all_acc, x_data=x_data[0], title=f"{name}_ave_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_accuracy_{name}_ds_{dataset_name}.png", filter=False)
 
-    # # save all raw data as csv
-    # with open(f"{args.output_dir}/{args.infer_type}_tp_data_{name}_ds_{dataset_name}.csv", "w") as file:
-    #     for i in range(max_test_count):
-    #         write_csv_line(file, "token_len", x_data[i])
-    #         write_csv_line(file, "prefill_tps", all_prefill_tps[i])
-    #         write_csv_line(file, "decode_tps", all_decoding_tps[i])
-    #         write_csv_line(file, "decode_time", all_decoding_time[i])
-    #         write_csv_line(file, "accuracy", all_acc[i])
-    #         write_csv_line(file, "memory_used", all_mem_used[i])
+    # save all raw data as csv
+    with open(f"{args.output_dir}/{args.infer_type}_tp_data_{name}_ds_{dataset_name}.csv", "w") as file:
+        for i in range(max_test_count):
+            write_csv_line(file, "token_len", x_data[i])
+            write_csv_line(file, "prefill_tps", all_prefill_tps[i])
+            write_csv_line(file, "decode_tps", all_decoding_tps[i])
+            write_csv_line(file, "decode_time", all_decoding_time[i])
+            write_csv_line(file, "accuracy", all_acc[i])
+            write_csv_line(file, "memory_used", all_mem_used[i])
 
     # save ave data as csv
     with open(f"{args.output_dir}/{args.infer_type}_AVE_{name}_ds_{dataset_name}.csv", "w") as file:
