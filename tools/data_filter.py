@@ -13,7 +13,7 @@ def main(args):
     except:
         dataset = load_dataset('json', data_files=args.dataset, split=f"train")
 
-    dataname = args.dataset.split("/")[-1]
+    dataname = args.dataset.split("/")[-1].split(".")[0]
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     output = open(args.output, "w", encoding="utf-8")
 

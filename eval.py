@@ -160,6 +160,7 @@ def main(args):
     max_test_count = 10
     cnt = 0
 
+    print(f"testing {name}, dataset: {dataset_name}")
     all_prefill_tps = [[] for _ in range(max_test_count)]
     all_decoding_tps = [[] for _ in range(max_test_count)]
     all_decoding_time = [[] for _ in range(max_test_count)]

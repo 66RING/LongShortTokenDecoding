@@ -157,6 +157,8 @@ def main(args):
 
     dataset_name = args.test_data.split("/")[-1].split(".")[0]
 
+    print(f"testing {name}, dataset: {dataset_name}")
+
     max_test_count = 10
     cnt = 0
 
