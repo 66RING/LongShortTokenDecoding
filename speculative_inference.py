@@ -4,7 +4,7 @@ from tqdm import tqdm
 from typing import List, Optional, Set, Tuple, Union
 from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
-from cache_manager import DynamicCache
+from cache_manager import DynamicCache, SinkCache
 
 
 
@@ -116,7 +116,7 @@ class SPD:
                 )
 
                 draft_past_key_values = draft_outputs.past_key_values
-                if self.cache_manager is not None:
+                if self.cache_manager is not None and not isinstance(self.cache_manager, ShortCache):
                     draft_past_key_values = self.cache_manager(draft_past_key_values)
                 else:
                     draft_past_key_values = draft_past_key_values

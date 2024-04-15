@@ -10,7 +10,7 @@ from transformers import (
     LlamaTokenizer,
     AutoTokenizer,
 )
-from cache_manager import SinkCache, DynamicCache
+from cache_manager import SinkCache, DynamicCache, ShortCache
 from tqdm import tqdm
 from datasets import load_dataset
 
@@ -112,6 +112,11 @@ def main(args):
             start_size=args.start_size, recent_size=args.recent_size
         )
         ctype = "sink"
+    elif args.cache_type == "scache":
+        kv_cache_manager = ShortCache(
+            start_size=args.start_size, recent_size=args.recent_size
+        )
+        ctype = "scache"
     elif args.cache_type == "dyn":
         kv_cache_manager = DynamicCache(
             cache_unit_range=(args.dyn_umin, args.dyn_umax),
@@ -175,7 +180,6 @@ def main(args):
 
         for _ in [0]:
 
-            # TODO: insert prompt
 
             # (bs, seqlen)
             input_token = input_ids
@@ -194,24 +198,8 @@ def main(args):
                     max_gen_len=args.warmup_step,
                     max_sample=max_sample)
 
-            # TODO: renew cache manager
-            if isinstance(model, SPD):
-                if args.cache_type == "sink":
-                    kv_cache_manager = SinkCache(
-                        start_size=args.start_size, recent_size=args.recent_size
-                    )
-                elif args.cache_type == "dyn":
-                    kv_cache_manager = DynamicCache(
-                        cache_unit_range=(args.dyn_umin, args.dyn_umax),
-                        kick=3,
-                        unit=args.dyn_usize,
-                        start_size=4,
-                        slow_up_unum=4,
-                        threshold=0.75,
-                    )
-                else:
-                    raise ValueError(f"Invalid cache_type: {args.cache_type}")
-                model.cache_manager = kv_cache_manager
+            # renew cache manager after warmup
+            model.cache_manager.reset()
 
             # generation start
             generated_ids, prefill_time, decode_time, accuracy = model.generate(
@@ -257,7 +245,7 @@ def main(args):
             all_decoding_tps[cnt].append(decode_tokens_per_second)
             all_decoding_time[cnt].append(np.sum(decode_time))
             all_acc[cnt].append(np.mean(accuracy))
-            print(f"{cnt}: token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+            print(f"{cnt}/{max_test_count}: token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
             generated_ids = None
             input_token = None

@@ -17,7 +17,11 @@ DIM_TO_SLICE = {
     3: slice3d,
 }
 
-class SinkCache:
+class CacheManager:
+    def reset(self):
+        pass
+
+class SinkCache(CacheManager):
     def __init__(
         self,
         start_size=4,
@@ -64,7 +68,10 @@ class SinkCache:
             for k, v in past_key_values
         ]
 
-class LongShortTokenCache:
+class ShortCache(SinkCache):
+    pass
+
+class LongShortTokenCache(CacheManager):
     # TODO: gap list
     def __init__(self, unit_list: List, gap: int = 4, sink: int = 4, k_seq_dim= 2, v_seq_dim=2):
         '''
@@ -207,7 +214,7 @@ def test_long_short_token_cache():
         print(new_k)
 
 
-class DynamicCache:
+class DynamicCache(CacheManager):
     def __init__(self,
             cache_unit_range,
             kick=3,
@@ -246,11 +253,8 @@ class DynamicCache:
         self.v_seq_dim = 2
         self.k_slice = DIM_TO_SLICE[self.k_seq_dim]
         self.v_slice = DIM_TO_SLICE[self.v_seq_dim]
-        # acc accumulator
+        # accuracy accumulator
         self.acc = 1
-
-        # TODO: for debug
-        self.size_list = []
 
     # TCP like block avoiding algorithm
     def step(self, acc):
@@ -276,6 +280,15 @@ class DynamicCache:
 
             # TODO: debug only
             self.size_list.append(self.cache_size)
+
+    def reset():
+        # start with max cache size
+        self.recent_size = self.cache_max_size
+        self.kick_cnt = 0
+        self.cache_size = self.start_size + self.recent_size
+        self.quick_up_cnt = 0
+        # init accuracy
+        self.acc = 1
 
     def __call__(self, past_key_values):
         '''

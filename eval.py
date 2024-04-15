@@ -10,7 +10,7 @@ from transformers import (
     LlamaTokenizer,
     AutoTokenizer,
 )
-from cache_manager import SinkCache, DynamicCache
+from cache_manager import SinkCache, DynamicCache, ShortCache
 from tqdm import tqdm
 from datasets import load_dataset
 
@@ -112,6 +112,11 @@ def main(args):
             start_size=args.start_size, recent_size=args.recent_size
         )
         ctype = "sink"
+    elif args.cache_type == "scache":
+        kv_cache_manager = ShortCache(
+            start_size=args.start_size, recent_size=args.recent_size
+        )
+        ctype = "scache"
     elif args.cache_type == "dyn":
         kv_cache_manager = DynamicCache(
             cache_unit_range=(args.dyn_umin, args.dyn_umax),
@@ -167,12 +172,10 @@ def main(args):
         input_ids = tokenized.input_ids.to(model.device)
         mask = tokenized.attention_mask.to(model.device)
 
-        # for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
-        for seqlen in [4*1024, 8*1024, 16*1024, 32*1024, 64*1024, 100*1024]:
+        for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
+        # for seqlen in [4*1024, 8*1024, 16*1024, 32*1024, 64*1024, 100*1024]:
             if args.max_token_len < seqlen:
                 break
-
-            # TODO: insert prompt
 
             # (bs, seqlen)
             input_token = input_ids[:, :seqlen]
@@ -191,24 +194,8 @@ def main(args):
                     max_gen_len=args.warmup_step,
                     max_sample=max_sample)
 
-            # TODO: renew cache manager
-            if isinstance(model, SPD):
-                if args.cache_type == "sink":
-                    kv_cache_manager = SinkCache(
-                        start_size=args.start_size, recent_size=args.recent_size
-                    )
-                elif args.cache_type == "dyn":
-                    kv_cache_manager = DynamicCache(
-                        cache_unit_range=(args.dyn_umin, args.dyn_umax),
-                        kick=3,
-                        unit=args.dyn_usize,
-                        start_size=4,
-                        slow_up_unum=4,
-                        threshold=0.75,
-                    )
-                else:
-                    raise ValueError(f"Invalid cache_type: {args.cache_type}")
-                model.cache_manager = kv_cache_manager
+            # renew cache manager after warmup
+            model.cache_manager.reset()
 
             # generation start
             generated_ids, prefill_time, decode_time, accuracy = model.generate(
@@ -254,7 +241,7 @@ def main(args):
             all_decoding_tps[cnt].append(decode_tokens_per_second)
             all_decoding_time[cnt].append(np.sum(decode_time))
             all_acc[cnt].append(np.mean(accuracy))
-            print(f"token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+            print(f"{cnt}/{max_test_count}: token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
             generated_ids = None
             input_token = None
@@ -276,25 +263,25 @@ def main(args):
     plot_ave_all_decoding_tps = [np.mean(list(row)) for row in zip(*all_decoding_tps)]
     plot_ave_all_acc = [np.mean(list(row)) for row in zip(*all_acc)]
 
-    # draw decoding time graph
-    draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_decode_time_{name}_ds_{dataset_name}.png", filter=False)
-    # draw accuracy graph
-    draw_line_char(plot_all_acc, x_data=x_data[0], title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_accuracy_{name}_ds_{dataset_name}.png", filter=False)
-    # draw memory used graph
-    draw_line_char(plot_all_mem_used, x_data=x_data[0], title=f"{name}_mem", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_mem_use_{name}_ds_{dataset_name}.png", filter=False)
-    # draw ave graph
-    draw_line_char(plot_ave_all_decoding_tps, x_data=x_data[0],title=f"{name}_ave_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_decode_time_{name}_ds_{dataset_name}.png", filter=False)
-    draw_line_char(plot_ave_all_acc, x_data=x_data[0], title=f"{name}_ave_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_accuracy_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw decoding time graph
+    # draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_decode_time_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw accuracy graph
+    # draw_line_char(plot_all_acc, x_data=x_data[0], title=f"{name}_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_accuracy_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw memory used graph
+    # draw_line_char(plot_all_mem_used, x_data=x_data[0], title=f"{name}_mem", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_mem_use_{name}_ds_{dataset_name}.png", filter=False)
+    # # draw ave graph
+    # draw_line_char(plot_ave_all_decoding_tps, x_data=x_data[0],title=f"{name}_ave_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_decode_time_{name}_ds_{dataset_name}.png", filter=False)
+    # draw_line_char(plot_ave_all_acc, x_data=x_data[0], title=f"{name}_ave_acc, mean={np.mean(all_acc):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_ave_accuracy_{name}_ds_{dataset_name}.png", filter=False)
 
-    # # save all raw data as csv
-    # with open(f"{args.output_dir}/{args.infer_type}_tp_data_{name}_ds_{dataset_name}.csv", "w") as file:
-    #     for i in range(max_test_count):
-    #         write_csv_line(file, "token_len", x_data[i])
-    #         write_csv_line(file, "prefill_tps", all_prefill_tps[i])
-    #         write_csv_line(file, "decode_tps", all_decoding_tps[i])
-    #         write_csv_line(file, "decode_time", all_decoding_time[i])
-    #         write_csv_line(file, "accuracy", all_acc[i])
-    #         write_csv_line(file, "memory_used", all_mem_used[i])
+    # save all raw data as csv
+    with open(f"{args.output_dir}/{args.infer_type}_tp_data_{name}_ds_{dataset_name}.csv", "w") as file:
+        for i in range(max_test_count):
+            write_csv_line(file, "token_len", x_data[i])
+            write_csv_line(file, "prefill_tps", all_prefill_tps[i])
+            write_csv_line(file, "decode_tps", all_decoding_tps[i])
+            write_csv_line(file, "decode_time", all_decoding_time[i])
+            write_csv_line(file, "accuracy", all_acc[i])
+            write_csv_line(file, "memory_used", all_mem_used[i])
 
     # save ave data as csv
     with open(f"{args.output_dir}/{args.infer_type}_AVE_{name}_ds_{dataset_name}.csv", "w") as file:
