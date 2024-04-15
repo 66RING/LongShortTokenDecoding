@@ -4,7 +4,7 @@ from tqdm import tqdm
 from typing import List, Optional, Set, Tuple, Union
 from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
-from cache_manager import DynamicCache, SinkCache
+from cache_manager import DynamicCache, SinkCache, ShortCache
 
 
 
@@ -38,7 +38,7 @@ class SPD:
         attention_mask = None,
         **kwargs,
     # TODO: format return
-    ) -> Tuple[torch.Tensor, float, List[float], List[float]]:
+    ):
         '''
         speculative inference
         genenrate next N token without loss return
@@ -57,16 +57,15 @@ class SPD:
             decode_time: List[float], decode time for each token
             accuracy: List[float], accept rate for each iteration
         '''
-        prefill_time = 0
-        decode_time = []
-        accuracy = []
-
         bsz, input_seqlen = input_ids.shape
+
+        torch.cuda.synchronize()
+        decode_time = time.time()
+        accuracy = []
 
         # TODO: wrap as an easy to use kv cache interface
 
         # prefill phase and kv cache init
-        start = time.time()
         if past_key_values is None:
             outputs = self.target_model(
                 input_ids=input_ids,
@@ -81,10 +80,6 @@ class SPD:
         else:
             generated_ids = torch.empty((bsz, 0), device=input_ids.device, dtype=input_ids.dtype)
 
-        torch.cuda.synchronize()
-        end = time.time()
-        prefill_time = (end - start)
-
         draft_next_ids = input_ids
         target_next_ids = input_ids
 
@@ -94,7 +89,6 @@ class SPD:
         acc = 1.0
         while generated_len < max_gen_len:
             torch.cuda.synchronize()
-            start = time.time()
             stable_len = generated_ids.shape[1]
 
             if isinstance(self.cache_manager, DynamicCache):
@@ -190,10 +184,6 @@ class SPD:
             past_key_values = past_key_values_trimmed
             generated_len = generated_ids.shape[1]
 
-            torch.cuda.synchronize()
-            end = time.time()
-            decode_time.extend([(end - start)/(accept_len + 1)] * (accept_len + 1))
-
             acc = accept_len/max_sample if max_sample != 0 else 1
             accuracy.append(acc)
             pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}"})
@@ -202,7 +192,9 @@ class SPD:
             if self.tokenizer.eos_token_id in generated_ids[-(max_sample+1):]:
                 break
 
+        torch.cuda.synchronize()
+        decode_time = time.time() - decode_time
 
-        return generated_ids, prefill_time, decode_time, accuracy
+        return generated_ids, decode_time, accuracy
 
 

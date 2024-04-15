@@ -21,9 +21,25 @@ from viz_utils import draw_line_char, write_csv_line
 
 from speculative_inference import SPD
 from baseline.modeling_baseline import Base
+from baseline.modeling_lade import Lade
 
 
 def main(args):
+    if args.infer_type == "lade":
+        print("modeling_lade")
+        import lade as lade
+        import os
+        os.environ["LOAD_LADE"]='1'
+        os.environ["USE_LADE"]='1'
+        lade.augment_all()
+        #For a 7B model, set LEVEL=5, WINDOW_SIZE=7, GUESS_SET_SIZE=7 
+        lade.config_lade(LEVEL=7, WINDOW_SIZE=20, GUESS_SET_SIZE=20, DEBUG=1, POOL_FROM_PROMPT=True, USE_FLASH=True)
+        from transformers import LlamaConfig, LlamaForCausalLM
+    else:
+        from modeling_llama import LlamaForCausalLM
+        from configuration_llama import LlamaConfig
+
+
     model_name_or_path = args.model_name_or_path
     name = model_name_or_path.split("/")[-1]
     print(model_name_or_path)
@@ -145,8 +161,8 @@ def main(args):
         model = SPD(model, tokenizer=tokenizer, cache_manager=kv_cache_manager)
     elif args.infer_type == "base":
         model = Base(model, tokenizer=tokenizer)
-    # elif args.infer_type == "eagle":
-    #     model = EAGLE(model, args.eagle_path, tokenizer=tokenizer)
+    elif args.infer_type == "lade":
+        model = Lade(model, tokenizer=tokenizer)
     else:
         raise ValueError(f"Invalid infer_type: {args.infer_type}")
 
@@ -201,10 +217,11 @@ def main(args):
                     max_sample=max_sample)
 
             # renew cache manager after warmup
-            model.cache_manager.reset()
+            if isinstance(model, SPD):
+                model.cache_manager.reset()
 
             # generation start
-            generated_ids, prefill_time, decode_time, accuracy = model.generate(
+            generated_ids, decode_time, accuracy = model.generate(
                     input_ids=input_token,
                     attention_mask=attention_mask,
                     past_key_values=None,
@@ -232,9 +249,6 @@ def main(args):
             else:
                 generated_len = generated_ids.shape[1]
 
-            # number of tokens in context / time for processing context * batch size
-            prefill_tokens_per_second = token_len / prefill_time * batch_size
-            # 1 second / median time per token in seconds * batch size
             # NOTE: second per token
             decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
 
@@ -243,11 +257,10 @@ def main(args):
 
             x_data[cnt].append(token_len)
             all_mem_used[cnt].append(memory_used)
-            all_prefill_tps[cnt].append(prefill_tokens_per_second)
             all_decoding_tps[cnt].append(decode_tokens_per_second)
             all_decoding_time[cnt].append(np.sum(decode_time))
             all_acc[cnt].append(np.mean(accuracy))
-            print(f"{cnt}/{max_test_count}: token_len: {token_len}, prefill_tps: {prefill_tokens_per_second:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+            print(f"{cnt}/{max_test_count}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
             generated_ids = None
             input_token = None
@@ -258,16 +271,16 @@ def main(args):
         if cnt >= max_test_count:
             break
 
-    # NOTE: transpose to plot
-    plot_all_decoding_tps = [list(row) for row in zip(*all_decoding_tps)]
-    plot_all_prefill_tps = [list(row) for row in zip(*all_prefill_tps)]
-    plot_all_decoding_time = [list(row) for row in zip(*all_decoding_time)]
-    plot_all_acc = [list(row) for row in zip(*all_acc)]
-    plot_all_mem_used = [list(row) for row in zip(*all_mem_used)]
+    # # NOTE: transpose to plot
+    # plot_all_decoding_tps = [list(row) for row in zip(*all_decoding_tps)]
+    # plot_all_prefill_tps = [list(row) for row in zip(*all_prefill_tps)]
+    # plot_all_decoding_time = [list(row) for row in zip(*all_decoding_time)]
+    # plot_all_acc = [list(row) for row in zip(*all_acc)]
+    # plot_all_mem_used = [list(row) for row in zip(*all_mem_used)]
 
-    # plot_ave_all_decoding_time = [np.mean(list(row)) for row in zip(*all_decoding_time)]
-    plot_ave_all_decoding_tps = [np.mean(list(row)) for row in zip(*all_decoding_tps)]
-    plot_ave_all_acc = [np.mean(list(row)) for row in zip(*all_acc)]
+    # # plot_ave_all_decoding_time = [np.mean(list(row)) for row in zip(*all_decoding_time)]
+    # plot_ave_all_decoding_tps = [np.mean(list(row)) for row in zip(*all_decoding_tps)]
+    # plot_ave_all_acc = [np.mean(list(row)) for row in zip(*all_acc)]
 
     # # draw decoding time graph
     # draw_line_char(plot_all_decoding_tps, x_data=x_data[0],title=f"{name}_tps, total_time={np.sum(all_decoding_time):.2f}", show=False, save_path=f"{args.output_dir}/{args.infer_type}_tp_decode_time_{name}_ds_{dataset_name}.png", filter=False)

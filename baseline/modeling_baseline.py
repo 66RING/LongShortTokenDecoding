@@ -21,21 +21,16 @@ class Base:
             **kwargs
         ):
         model = self.model
-        prefill_time = 0
-        decode_time = []
-
         batch_size = input_ids.size(0)
+        torch.cuda.synchronize()
+        decode_time = time.time()
 
         # prefill phase
-        start = time.time()
         outputs = model(
             input_ids=input_ids,
             past_key_values=past_key_values,
             use_cache=True,
         )
-        torch.cuda.synchronize()
-        end = time.time()
-        prefill_time = (end - start)
 
         past_key_values = outputs.past_key_values
         # logits.shape: [bs, seq_len, vocab_size]
@@ -46,8 +41,6 @@ class Base:
         generated_ids = pred_token_idx
 
         for i in tqdm(range(max_gen_len - 1)):
-            torch.cuda.synchronize()
-            start = time.time()
             # decoding phase, generate next token with last token and kv cache
             outputs = model(
                 input_ids=pred_token_idx,
@@ -58,12 +51,13 @@ class Base:
             pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
             generated_ids = torch.cat([generated_ids, pred_token_idx], dim=1)
 
-            torch.cuda.synchronize()
-            end = time.time()
-            decode_time.append(end - start)
             if self.tokenizer.eos_token_id in pred_token_idx:
                 break
 
-        return generated_ids, prefill_time, decode_time, [1 for _ in decode_time]
+        torch.cuda.synchronize()
+        decode_time = time.time() - decode_time
+        acc = [1]
+
+        return generated_ids, decode_time, acc
 
 
