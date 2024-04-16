@@ -10,13 +10,13 @@ from transformers import (
     LlamaTokenizer,
     AutoTokenizer,
 )
-from cache_manager import SinkCache, DynamicCache, ShortCache
+from cache_manager import SinkCache, DynamicCache, ShortCache, TcpCache
 from tqdm import tqdm
 from datasets import load_dataset
 
 from modeling_llama import LlamaForCausalLM
 from transformers import AutoModelForCausalLM, AutoConfig
-from configuration_llama import LlamaConfig
+
 from viz_utils import draw_line_char, write_csv_line
 
 from speculative_inference import SPD
@@ -27,7 +27,7 @@ from baseline.modeling_lade import Lade
 def main(args):
     if args.infer_type == "lade":
         print("modeling_lade")
-        import lade as lade
+        import lade
         import os
         os.environ["LOAD_LADE"]='1'
         os.environ["USE_LADE"]='1'
@@ -48,26 +48,15 @@ def main(args):
     path = Path(args.output_dir)
     path.mkdir(parents=True, exist_ok=True)
 
-    # NOTE: not support auto model since model modified
-    try:
-        tokenizer = LlamaTokenizer.from_pretrained(
-            model_name_or_path,
-            trust_remote_code=True,
-        )
-    except:
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path,
-            trust_remote_code=True,
-        )
-
-    # NOTE: add pad_token to use padding
-    tokenizer.pad_token = tokenizer.eos_token
-
     config = AutoConfig.from_pretrained(
         model_name_or_path,
         trust_remote_code=True,
     )
     if config.model_type == "llama":
+        tokenizer = LlamaTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
         # TODO: support for LWM
         config = LlamaConfig.from_pretrained(
             model_name_or_path,
@@ -109,6 +98,14 @@ def main(args):
             use_safetensors=True,
         )
 
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
+
+    # NOTE: add pad_token to use padding
+    tokenizer.pad_token = tokenizer.eos_token
+
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token_id is not None:
             tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -120,29 +117,35 @@ def main(args):
     max_gen_len = args.max_gen_len
     # k
     max_sample = args.max_sample
-    name = f"{name}_s{max_sample}_cache_{args.recent_size//1024}k"
+    name = f"{name}_s{max_sample}"
 
     ctype = ""
     if args.cache_type == "sink":
         kv_cache_manager = SinkCache(
             start_size=args.start_size, recent_size=args.recent_size
         )
-        ctype = "sink"
+        ctype = f"sink_{args.start_size}_{args.recent_size//1024}k"
     elif args.cache_type == "scache":
         kv_cache_manager = ShortCache(
             start_size=args.start_size, recent_size=args.recent_size
         )
-        ctype = "scache"
+        ctype = f"scache_{args.start_size}_{args.recent_size//1024}k"
     elif args.cache_type == "dyn":
         kv_cache_manager = DynamicCache(
             cache_unit_range=(args.dyn_umin, args.dyn_umax),
-            kick=3,
+            kick=1,
             unit=args.dyn_usize,
             start_size=4,
             slow_up_unum=4,
-            threshold=0.75,
+            threshold=0.5,
         )
         ctype = f"dyn({args.dyn_umin},{args.dyn_umax},{args.dyn_usize})"
+    elif args.cache_type == "tcp":
+        kv_cache_manager = TcpCache(
+            cache_unit_range=(args.dyn_umin, args.dyn_umax),
+            unit=args.dyn_usize,
+        )
+        ctype = f"tcp({args.dyn_umin},{args.dyn_umax},{args.dyn_usize})"
     else:
         raise ValueError(f"Invalid cache_type: {args.cache_type}")
 
@@ -242,6 +245,7 @@ def main(args):
                     .split(" ")
                 )
 
+                print()
                 print(" ".join(generated_text), flush=True)
 
             if isinstance(generated_ids, list):
@@ -332,9 +336,9 @@ if __name__ == "__main__":
     parser.add_argument("--infer_type", type=str, default="lstd", help="lstd, base or eagle")
     # parser.add_argument("--eagle_path", type=str, help="Eagle head path for eagle inference.")
     parser.add_argument("--cache_type", type=str, help="Cache manager type.", default="sink")
-    parser.add_argument("--dyn_umax", type=int, help="DynamicCache max unit.", default=16)
-    parser.add_argument("--dyn_umin", type=int, help="DynamicCache min unit.", default=8)
-    parser.add_argument("--dyn_usize", type=int, help="DynamicCache unit size.", default=256)
+    parser.add_argument("--dyn_umax", type=int, help="max unit num.", default=16)
+    parser.add_argument("--dyn_umin", type=int, help="min unit num.", default=8)
+    parser.add_argument("--dyn_usize", type=int, help="unit size.", default=256)
     parser.add_argument("--max_gen_len", type=int, help="max generation len", default=1024)
     args = parser.parse_args()
 

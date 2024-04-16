@@ -217,7 +217,7 @@ def test_long_short_token_cache():
 class DynamicCache(CacheManager):
     def __init__(self,
             cache_unit_range,
-            kick=3,
+            kick=1,
             unit=256,
             start_size=4,
             slow_up_unum=4,
@@ -262,7 +262,7 @@ class DynamicCache(CacheManager):
         self.kick_cnt += 1
         # TODO:
         self.acc = (self.acc + acc) / 2
-        if self.kick_cnt > self.kick:
+        if self.kick_cnt >= self.kick:
             self.kick_cnt = 0
 
             if acc < self.threshold:
@@ -278,10 +278,7 @@ class DynamicCache(CacheManager):
                     self.recent_size = min(self.cache_size + self.unit, self.cache_max_size)
             self.cache_size = self.start_size + self.recent_size
 
-            # TODO: debug only
-            self.size_list.append(self.cache_size)
-
-    def reset():
+    def reset(self):
         # start with max cache size
         self.recent_size = self.cache_max_size
         self.kick_cnt = 0
@@ -320,6 +317,132 @@ class DynamicCache(CacheManager):
             ]
             for k, v in past_key_values
         ]
+
+class TcpCache(CacheManager):
+    '''
+    while:
+          for self.max_draft:
+              draft()
+          out, acc = verify()
+          step(acc,throughput)
+
+    def step(acc,throughput):
+        move_ave_throughput = 0.5*move_ave_throughput + 0.5 * throughput
+        if throughput increases:
+           decrease window length slowly (length = length - 256)
+        else if throughput decreases < 0.2:
+           increase window length slowly (length = length + 256)
+        else if throughput decreases > 0.2:
+            if acc decrease:
+                increase window length (length *= 1.5)
+            else:
+                decrease window length (length /= 1.5)
+                        
+    
+    '''
+    def __init__(self, cache_unit_range, unit, start_size=4, tp_threshold=0.2):
+        self.unit = unit
+        self.cache_max_size = cache_unit_range[1] * unit
+        self.cache_min_size = cache_unit_range[0] * unit
+
+        # TODO: tp_threshold 0.2, 0.3
+        self.tp_threshold = tp_threshold
+        self.prev_tp = None
+        self.prev_acc = 1.0
+
+        # start with max cache size
+        self.recent_size = self.cache_max_size
+        # attention sink
+        self.start_size = start_size
+        # current cache size
+        self.cache_size = self.start_size + self.recent_size
+
+        # TODO: hard coded 2
+        self.k_seq_dim = 2
+        self.v_seq_dim = 2
+        self.k_slice = DIM_TO_SLICE[self.k_seq_dim]
+        self.v_slice = DIM_TO_SLICE[self.v_seq_dim]
+
+    def step(self, acc, tp):
+        if self.prev_tp == None:
+            self.prev_tp = tp
+
+        # TODO: tp, prev_tp平滑比例
+        new_tp = (tp + self.prev_tp) / 2
+        if self.prev_tp == 0:
+            tp_grad = 1.0
+        else:
+            tp_grad = (new_tp - self.prev_tp) / self.prev_tp
+
+        if tp_grad > 0:
+            # decrease window length slowly (length = length - 256)
+            self.recent_size = max(self.cache_min_size, self.recent_size - self.unit)
+        elif tp_grad == 0:
+            pass
+        elif tp_grad <= -self.tp_threshold:
+            # increase window length slowly (length = length + 256)
+            # BUG: 容易导致cache size处在高位
+            # size大局部性不高时, 继续增大cachetp进一步下降, 且可能是缓慢下降
+            self.recent_size = min(self.cache_max_size, self.recent_size + self.unit)
+        elif tp_grad > -self.tp_threshold:
+            if self.prev_acc == 0:
+                acc_grad = 1.0
+            else:
+                acc_grad = (acc - self.prev_acc) / self.prev_acc
+
+            if acc_grad > 0:
+                # increase window length (length *= 1.5)
+                # TODO: 1.5超参
+                self.recent_size = int(min(self.cache_max_size, self.recent_size * 1.5))
+            elif acc_grad == 0:
+                pass
+            else:
+                # decrease window length (length /= 1.5)
+                self.recent_size = int(max(self.cache_min_size, self.recent_size / 1.5))
+        else:
+            raise ValueError(f"unexpected tp_grad {tp_grad}")
+
+        # update
+        self.prev_tp = new_tp
+        self.prev_acc = acc
+        self.cache_size = self.recent_size + self.recent_size
+
+    def reset(self):
+        self.recent_size = self.cache_max_size
+        self.prev_tp = None
+        self.prev_acc = 1.0
+
+    def __call__(self, past_key_values):
+        '''
+        past_key_values = [layer_num,..][k, v](batch, head, seq, hidden_dim)
+        '''
+
+        if past_key_values is None:
+            return None
+        seq_len = past_key_values[0][0].size(self.k_seq_dim)
+        if seq_len <= self.cache_size:
+            return past_key_values
+
+        return [
+            [
+                torch.cat(
+                    [
+                        self.k_slice(k, 0, self.start_size),
+                        self.k_slice(k, seq_len - self.recent_size, seq_len),
+                    ],
+                    dim=self.k_seq_dim,
+                ),
+                torch.cat(
+                    [
+                        self.v_slice(v, 0, self.start_size),
+                        self.v_slice(v, seq_len - self.recent_size, seq_len),
+                    ],
+                    dim=self.v_seq_dim,
+                ),
+            ]
+            for k, v in past_key_values
+        ]
+
 
 
 
