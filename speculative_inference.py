@@ -4,7 +4,7 @@ from tqdm import tqdm
 from typing import List, Optional, Set, Tuple, Union
 from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
-from cache_manager import DynamicCache, SinkCache, ShortCache
+from cache_manager import DynamicCache, SinkCache, ShortCache, TcpCache
 
 
 
@@ -69,6 +69,8 @@ class SPD:
         if past_key_values is None:
             outputs = self.target_model(
                 input_ids=input_ids,
+                # TODO: match with baseline
+                past_key_values=past_key_values,
                 use_cache=True,
             )
             past_key_values = outputs.past_key_values
@@ -78,21 +80,22 @@ class SPD:
             generated_ids = pred_token_idx
             input_ids = pred_token_idx
         else:
+            # TODO: hard code for now
+            assert past_key_values is None
             generated_ids = torch.empty((bsz, 0), device=input_ids.device, dtype=input_ids.dtype)
 
         draft_next_ids = input_ids
         target_next_ids = input_ids
 
-        generated_len = 0
+        generated_len = generated_ids.shape[1]
         pbar = tqdm(total=max_gen_len)
         cache_size = 0
         acc = 1.0
         while generated_len < max_gen_len:
-            torch.cuda.synchronize()
-            stable_len = generated_ids.shape[1]
+            if self.tokenizer.eos_token_id in generated_ids[-(max_sample+1):]:
+                break
 
-            if isinstance(self.cache_manager, DynamicCache):
-                self.cache_manager.step(acc)
+            stable_len = generated_ids.shape[1]
 
             # create empty draft prob
             draft_generated_prob = torch.empty((bsz, 0, self.draft_model.config.vocab_size), device=input_ids.device, dtype=input_ids.dtype)
@@ -100,6 +103,9 @@ class SPD:
                 draft_past_key_values = self.cache_manager(past_key_values)
             else:
                 draft_past_key_values = past_key_values
+            
+            # TODO: time for TcpCache 
+            dt = time.time()
 
             # NOTE: draft gen max_sample next tokens
             for i in range(max_sample):
@@ -186,11 +192,17 @@ class SPD:
 
             acc = accept_len/max_sample if max_sample != 0 else 1
             accuracy.append(acc)
+
+            dt = time.time() - dt
+            throughput = (accept_len + 1) / dt
+
             pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}"})
             pbar.update(accept_len+1)
 
-            if self.tokenizer.eos_token_id in generated_ids[-(max_sample+1):]:
-                break
+            if isinstance(self.cache_manager, DynamicCache):
+                self.cache_manager.step(acc)
+            elif isinstance(self.cache_manager, TcpCache):
+                self.cache_manager.step(acc, throughput)
 
         torch.cuda.synchronize()
         decode_time = time.time() - decode_time

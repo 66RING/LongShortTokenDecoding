@@ -39,8 +39,11 @@ class Base:
 
         # init generated_ids
         generated_ids = pred_token_idx
-
         for i in tqdm(range(max_gen_len - 1)):
+            # TODO: debug
+            if self.tokenizer.eos_token_id == generated_ids[0, -1]:
+                break
+
             # decoding phase, generate next token with last token and kv cache
             outputs = model(
                 input_ids=pred_token_idx,
@@ -51,8 +54,6 @@ class Base:
             pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
             generated_ids = torch.cat([generated_ids, pred_token_idx], dim=1)
 
-            if self.tokenizer.eos_token_id in pred_token_idx:
-                break
 
         torch.cuda.synchronize()
         decode_time = time.time() - decode_time
