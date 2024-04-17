@@ -59,8 +59,6 @@ class SPD:
         '''
         bsz, input_seqlen = input_ids.shape
 
-        torch.cuda.synchronize()
-        decode_time = time.time()
         accuracy = []
 
         # TODO: wrap as an easy to use kv cache interface
@@ -86,6 +84,9 @@ class SPD:
 
         draft_next_ids = input_ids
         target_next_ids = input_ids
+
+        torch.cuda.synchronize()
+        decode_time = time.time()
 
         generated_len = generated_ids.shape[1]
         pbar = tqdm(total=max_gen_len)
@@ -196,7 +197,7 @@ class SPD:
             dt = time.time() - dt
             throughput = (accept_len + 1) / dt
 
-            pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}"})
+            pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}", "s": f"{max_sample}"})
             pbar.update(accept_len+1)
 
             if isinstance(self.cache_manager, DynamicCache):

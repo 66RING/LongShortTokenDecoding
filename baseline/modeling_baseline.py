@@ -22,8 +22,6 @@ class Base:
         ):
         model = self.model
         batch_size = input_ids.size(0)
-        torch.cuda.synchronize()
-        decode_time = time.time()
 
         # prefill phase
         outputs = model(
@@ -36,6 +34,9 @@ class Base:
         # logits.shape: [bs, seq_len, vocab_size]
         # get the last token and predict the next token idx
         pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+
+        torch.cuda.synchronize()
+        decode_time = time.time()
 
         # init generated_ids
         generated_ids = pred_token_idx
