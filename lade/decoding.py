@@ -689,7 +689,7 @@ def jacobi_sample_multilevel(
                 past_key_values=model_kwargs.get("past_key_values"),
             )
     else:
-        return input_ids
+        return input_ids, past_key_values
 
 
 
@@ -1256,7 +1256,7 @@ def jacobi_greedy_search_multilevel(
                 hidden_states=decoder_hidden_states,
             )
     else:
-        return input_ids
+        return input_ids, past_key_values
 
 
 
@@ -1545,4 +1545,4 @@ def greedy_search_chat(
                 hidden_states=decoder_hidden_states,
             )
     else:
-        return input_ids
+        return input_ids, past_key_values

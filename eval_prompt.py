@@ -22,6 +22,7 @@ from viz_utils import draw_line_char, write_csv_line
 from speculative_inference import SPD
 from baseline.modeling_baseline import Base
 from baseline.modeling_lade import Lade
+from lveval_utils import *
 
 
 def main(args):
@@ -33,7 +34,7 @@ def main(args):
         os.environ["USE_LADE"]='1'
         lade.augment_all()
         #For a 7B model, set LEVEL=5, WINDOW_SIZE=7, GUESS_SET_SIZE=7 
-        lade.config_lade(LEVEL=7, WINDOW_SIZE=20, GUESS_SET_SIZE=20, DEBUG=1, POOL_FROM_PROMPT=True, USE_FLASH=True)
+        lade.config_lade(LEVEL=7, WINDOW_SIZE=20, GUESS_SET_SIZE=20, DEBUG=0, POOL_FROM_PROMPT=True, USE_FLASH=True)
         from transformers import LlamaConfig, LlamaForCausalLM
     else:
         from modeling_llama import LlamaForCausalLM
@@ -53,10 +54,16 @@ def main(args):
         trust_remote_code=True,
     )
     if config.model_type == "llama":
-        tokenizer = LlamaTokenizer.from_pretrained(
-            model_name_or_path,
-            trust_remote_code=True,
-        )
+        try:
+            tokenizer = LlamaTokenizer.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=True,
+            )
+        except:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=True,
+            )
         # TODO: support for LWM
         config = LlamaConfig.from_pretrained(
             model_name_or_path,
@@ -187,11 +194,25 @@ def main(args):
     all_acc = [[] for _ in range(max_test_count)]
     all_mem_used = [[] for _ in range(max_test_count)]
     x_data = [[] for _ in range(max_test_count)]
+
+    # trim loogle_SD_mixup_128k _128k
+    split_strings = dataset_name.split('_')
+    if len(split_strings) > 0:
+        dataset_real_name = '_'.join(split_strings[:-1])
+    else:
+        dataset_real_name = dataset_name
+
     for sample in dataset:
         # TODO: hard code for dataset for now
-        context = sample["context"]
-        input = sample["input"]
-        input_text = f"{context}\n{input}"
+
+        if dataset_real_name in LVEVAL_DATASET_NAMES:
+            prompt_format = LVEVAL_DATASET_PROMPT[dataset_real_name]
+            prompt = prompt_format.format(**sample)
+            input_text = truncate_prompt(tokenizer, prompt, args.max_token_len)
+        else:
+            context_data = sample["context"]
+            input_data = sample["input"]
+            input_text = f"{context_data}\n{input_data}"
 
         tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
         input_ids = tokenized.input_ids.to(model.device)

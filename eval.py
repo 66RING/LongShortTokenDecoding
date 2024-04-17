@@ -31,7 +31,7 @@ def main(args):
         os.environ["USE_LADE"]='1'
         lade.augment_all()
         #For a 7B model, set LEVEL=5, WINDOW_SIZE=7, GUESS_SET_SIZE=7 
-        lade.config_lade(LEVEL=7, WINDOW_SIZE=20, GUESS_SET_SIZE=20, DEBUG=1, POOL_FROM_PROMPT=True, USE_FLASH=True)
+        lade.config_lade(LEVEL=7, WINDOW_SIZE=20, GUESS_SET_SIZE=20, DEBUG=0, POOL_FROM_PROMPT=True, USE_FLASH=True)
         from transformers import LlamaConfig, LlamaForCausalLM
     else:
         from modeling_llama import LlamaForCausalLM
@@ -51,10 +51,16 @@ def main(args):
         trust_remote_code=True,
     )
     if config.model_type == "llama":
-        tokenizer = LlamaTokenizer.from_pretrained(
-            model_name_or_path,
-            trust_remote_code=True,
-        )
+        try:
+            tokenizer = LlamaTokenizer.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=True,
+            )
+        except:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name_or_path,
+                trust_remote_code=True,
+            )
         # TODO: support for LWM
         config = LlamaConfig.from_pretrained(
             model_name_or_path,
