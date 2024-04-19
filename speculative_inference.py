@@ -65,16 +65,16 @@ class SPD:
 
         # prefill phase and kv cache init
         if past_key_values is None:
-            outputs = self.target_model(
+            target_outputs = self.target_model(
                 input_ids=input_ids,
                 # TODO: match with baseline
                 past_key_values=past_key_values,
                 use_cache=True,
             )
-            past_key_values = outputs.past_key_values
+            past_key_values = target_outputs.past_key_values
             # NOTE: sampling may cause huge performance downgrade in prefill phase
-            # pred_token_idx = self.logits_sampler.sample(outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
-            pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+            # pred_token_idx = self.logits_sampler.sample(target_outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
+            pred_token_idx = target_outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
             generated_ids = pred_token_idx
             input_ids = pred_token_idx
         else:
@@ -88,12 +88,17 @@ class SPD:
         torch.cuda.synchronize()
         decode_time = time.time()
 
+        max_sample = 8
+        mmax_sample = 20
+        tp_list = []
+        max_sample_list = []
+
         generated_len = generated_ids.shape[1]
         pbar = tqdm(total=max_gen_len)
         cache_size = 0
         acc = 1.0
         while generated_len < max_gen_len:
-            if self.tokenizer.eos_token_id in generated_ids[-(max_sample+1):]:
+            if self.tokenizer.eos_token_id in generated_ids[0, -(mmax_sample+1):]:
                 break
 
             stable_len = generated_ids.shape[1]
@@ -141,6 +146,7 @@ class SPD:
             # target_pred_token_prob: (bs, seqlen, vocab)
             # NOTE: target model generate max_sample+1 tokens
             target_generated_prob = target_outputs.logits[:, -(max_sample+1):, :]
+            assert target_generated_prob.shape[1] == max_sample + 1
             # target_generated_ids: (bs, seqlen)
             target_generated_ids = target_generated_prob.argmax(dim=-1)
 
@@ -161,6 +167,7 @@ class SPD:
             generated_ids = generated_ids[:, :stable_len + accept_len]
 
             # take target model last valid token
+            assert accept_len < target_generated_ids.shape[1]
             target_last_accept = target_generated_ids[:, accept_len].unsqueeze(-1)
             generated_ids = torch.cat([generated_ids, target_last_accept], dim=1)
 
@@ -200,6 +207,8 @@ class SPD:
             pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}", "s": f"{max_sample}"})
             pbar.update(accept_len+1)
 
+            tp_list.append(throughput)
+            max_sample_list.append(max_sample)
             if isinstance(self.cache_manager, DynamicCache):
                 self.cache_manager.step(acc)
             elif isinstance(self.cache_manager, TcpCache):
@@ -208,6 +217,6 @@ class SPD:
         torch.cuda.synchronize()
         decode_time = time.time() - decode_time
 
-        return generated_ids, decode_time, accuracy
+        return generated_ids, decode_time, accuracy, max_sample_list, tp_list
 
 
