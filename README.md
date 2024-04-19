@@ -48,6 +48,8 @@
 - [x] some cache and full cache generation not match
     1. wrong `end_pos`, since `generated_ids` have include the prob one. so need to -1
     2. `[:outrange]` may not crash in python
+- [ ] draft and base not match in some time
+    - since fp16/bf16 have some precision loss
 - [ ] transformer version
 
 ## tips
