@@ -43,5 +43,5 @@ class Lade:
         decode_time = time.time() - decode_time
         acc = [1]
 
-        return generated_ids, decode_time, acc
+        return generated_ids, decode_time, acc, [], []
 
