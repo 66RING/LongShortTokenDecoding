@@ -13,14 +13,21 @@ from transformers import (
 from cache_manager import SinkCache, DynamicCache, ShortCache, TcpCache
 from tqdm import tqdm
 from datasets import load_dataset
+from configuration_llama import LlamaConfig
 from transformers import AutoModelForCausalLM, AutoConfig
 
 from viz_utils import draw_line_char, write_csv_line
 
 from speculative_inference import SPD
-from baseline.modeling_baseline import Base
-from baseline.modeling_lade import Lade
+from baseline import Ssd, Lade, Base
 
+CLASS_MAP = {
+    "lade": Lade,
+    "base": Base,
+    "lstd": SPD,
+    "ssd-7b": Ssd,
+    "ssd-13b": Ssd,
+}
 
 def main(args):
     if args.infer_type == "lade":
@@ -32,11 +39,11 @@ def main(args):
         lade.augment_all()
         #For a 7B model, set LEVEL=5, WINDOW_SIZE=7, GUESS_SET_SIZE=7 
         lade.config_lade(LEVEL=7, WINDOW_SIZE=20, GUESS_SET_SIZE=20, DEBUG=0, POOL_FROM_PROMPT=True, USE_FLASH=True)
-        from transformers import LlamaConfig, LlamaForCausalLM
+        from transformers import LlamaForCausalLM
+    elif args.infer_type.startswith("ssd"):
+        from baseline.modeling_ssd import SsdLlamaForCausalLM as LlamaForCausalLM
     else:
         from modeling_llama import LlamaForCausalLM
-        from configuration_llama import LlamaConfig
-
 
     model_name_or_path = args.model_name_or_path
     name = model_name_or_path.split("/")[-1]
@@ -46,10 +53,22 @@ def main(args):
     path = Path(args.output_dir)
     path.mkdir(parents=True, exist_ok=True)
 
-    config = AutoConfig.from_pretrained(
-        model_name_or_path,
-        trust_remote_code=True,
-    )
+    name = f"{name}_max_{args.max_token_len}_min_{args.min_token_len}_step_{args.step_token_len}"
+    if args.algo == 7:
+        name = f"cs{args.ca_main}_{args.ca_small}_{name}"
+    else:
+        name = f"algo{args.algo}_{name}"
+
+    try:
+        config = AutoConfig.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
+    except:
+        config = LlamaConfig.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+        )
     if config.model_type == "llama":
         try:
             tokenizer = LlamaTokenizer.from_pretrained(
@@ -67,36 +86,36 @@ def main(args):
             trust_remote_code=True,
         )
         try:
-            print("try use_safetensors")
             model = LlamaForCausalLM.from_pretrained(
                 model_name_or_path,
                 config=config,
                 device_map="auto",
                 # attn_implementation="eager", # use LlamaAttention to test
                 attn_implementation="flash_attention_2", # eagle not support flash attention yet
-                torch_dtype=torch.float16,
+                torch_dtype=torch.bfloat16,
                 trust_remote_code=True,
                 use_safetensors=True,
             )
+            print("try use_safetensors")
         except:
-            print("not use_safetensors")
             model = LlamaForCausalLM.from_pretrained(
                 model_name_or_path,
                 config=config,
                 device_map="auto",
                 # attn_implementation="eager", # use LlamaAttention to test
                 attn_implementation="flash_attention_2", # eagle not support flash attention yet
-                torch_dtype=torch.float16,
+                torch_dtype=torch.bfloat16,
                 trust_remote_code=True,
                 use_safetensors=False,
             )
+            print("not use_safetensors")
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,
             device_map="auto",
             # attn_implementation="eager", # use LlamaAttention to test
             attn_implementation="flash_attention_2", # eagle not support flash attention yet
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             use_safetensors=True,
         )
@@ -169,6 +188,8 @@ def main(args):
         model = Base(model, tokenizer=tokenizer)
     elif args.infer_type == "lade":
         model = Lade(model, tokenizer=tokenizer)
+    elif args.infer_type.startswith("ssd"):
+        model = Ssd(model, tokenizer=tokenizer, model_type=args.infer_type)
     else:
         raise ValueError(f"Invalid infer_type: {args.infer_type}")
 
@@ -181,20 +202,28 @@ def main(args):
 
     print(f"testing {name}, dataset: {dataset_name}")
 
-    max_test_count = 10
+    max_test_count = args.max_test_count
     cnt = 0
 
-    all_prefill_tps = [[] for _ in range(max_test_count)]
-    all_decoding_tps = [[] for _ in range(max_test_count)]
-    all_decoding_time = [[] for _ in range(max_test_count)]
-    all_acc = [[] for _ in range(max_test_count)]
-    all_mem_used = [[] for _ in range(max_test_count)]
-    x_data = [[] for _ in range(max_test_count)]
+    all_decoding_tps = []
+    all_decoding_time = []
+    all_acc = []
+    all_mem_used = []
+    x_data = []
+
+    # (max_sample, acc)
+    all_max_sample_list = []
+    all_acc_list = []
+    all_tp_list = []
+    all_out_list = []
     for sample in dataset:
         input_text = sample[args.feature]
         tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
         input_ids = tokenized.input_ids.to(model.device)
         mask = tokenized.attention_mask.to(model.device)
+
+        if input_ids.shape[1] < args.max_token_len:
+            continue
 
         for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
         # for seqlen in [4*1024, 8*1024, 16*1024, 32*1024, 64*1024, 100*1024]:
@@ -223,7 +252,7 @@ def main(args):
                 model.cache_manager.reset()
 
             # generation start
-            generated_ids, decode_time, accuracy = model.generate(
+            generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
                     input_ids=input_token,
                     attention_mask=attention_mask,
                     past_key_values=None,
@@ -246,6 +275,7 @@ def main(args):
 
                 print()
                 print(" ".join(generated_text), flush=True)
+                all_out_list.append(generated_text)
 
             if isinstance(generated_ids, list):
                 generated_len = len(generated_ids)
@@ -258,11 +288,23 @@ def main(args):
             device = next(model.parameters()).device
             memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
 
+            if len(x_data) < cnt + 1:
+                x_data.append([])
+                all_mem_used.append([])
+                all_decoding_tps.append([])
+                all_decoding_time.append([])
+                all_acc.append([])
+
             x_data[cnt].append(token_len)
             all_mem_used[cnt].append(memory_used)
             all_decoding_tps[cnt].append(decode_tokens_per_second)
             all_decoding_time[cnt].append(np.sum(decode_time))
             all_acc[cnt].append(np.mean(accuracy))
+
+            all_acc_list.append(accuracy)
+            all_max_sample_list.append(max_sample_list)
+            all_tp_list.append(tp_list)
+
             print(f"{cnt}/{max_test_count}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
 
             generated_ids = None
@@ -274,6 +316,7 @@ def main(args):
         if cnt >= max_test_count:
             break
 
+    print(f">>> tested {max_test_count} samples")
     # # NOTE: transpose to plot
     # plot_all_decoding_tps = [list(row) for row in zip(*all_decoding_tps)]
     # plot_all_prefill_tps = [list(row) for row in zip(*all_prefill_tps)]
@@ -297,18 +340,27 @@ def main(args):
 
     # save all raw data as csv
     with open(f"{args.output_dir}/{args.infer_type}_tp_data_{name}_ds_{dataset_name}.csv", "w") as file:
-        for i in range(max_test_count):
+        for i in range(len(x_data)):
             write_csv_line(file, "token_len", x_data[i])
-            write_csv_line(file, "prefill_tps", all_prefill_tps[i])
             write_csv_line(file, "decode_tps", all_decoding_tps[i])
             write_csv_line(file, "decode_time", all_decoding_time[i])
             write_csv_line(file, "accuracy", all_acc[i])
             write_csv_line(file, "memory_used", all_mem_used[i])
 
+    # save (max_sample, acc) as csv
+    with open(f"{args.output_dir}/{args.infer_type}_max_sample_acc_{name}_ds_{dataset_name}.csv", "w") as file:
+        for pid in range(len(all_max_sample_list)):
+            write_csv_line(file, "max_sample", all_max_sample_list[pid])
+            write_csv_line(file, "accuracy", all_acc_list[pid])
+            write_csv_line(file, "tp", all_tp_list[pid])
+            try:
+                write_csv_line(file, "gen", [all_out_list[pid]])
+            except:
+                pass
+
     # save ave data as csv
     with open(f"{args.output_dir}/{args.infer_type}_AVE_{name}_ds_{dataset_name}.csv", "w") as file:
         write_csv_line(file, "token_len", x_data[0])
-        write_csv_line(file, "prefill_tps", [np.mean(list(row)) for row in zip(*all_prefill_tps)])
         write_csv_line(file, "decode_tps", [np.mean(list(row)) for row in zip(*all_decoding_tps)])
         write_csv_line(file, "decode_time", [np.mean(list(row)) for row in zip(*all_decoding_time)])
         write_csv_line(file, "accuracy", [np.mean(list(row)) for row in zip(*all_acc)])
@@ -339,6 +391,12 @@ if __name__ == "__main__":
     parser.add_argument("--dyn_umin", type=int, help="min unit num.", default=8)
     parser.add_argument("--dyn_usize", type=int, help="unit size.", default=256)
     parser.add_argument("--max_gen_len", type=int, help="max generation len", default=1024)
+    parser.add_argument("--max_test_count", type=int, help="max test sample number", default=10)
+    parser.add_argument("--ca_small", type=int, help="small local", default=8)
+    parser.add_argument("--ca_main", type=int, help="main local", default=64)
+    # TODO: template
+    parser.add_argument("--algo", type=int, help="max generation len", default=1)
+
     args = parser.parse_args()
 
     main(args)
