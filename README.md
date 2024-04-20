@@ -62,4 +62,5 @@
 
 - Sink may cause repeat
 - cliff point is not the balance point
+- pytorch memory leak like this: `output1 = model()`, `output2 = model()`
 
