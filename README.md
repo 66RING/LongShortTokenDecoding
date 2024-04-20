@@ -27,9 +27,6 @@
 - [ ] tree attention
     - [ ] tree flash attention
 - [ ] target model cache manager?
-- [ ] ppl test
-    1. reproduce streaming llm
-    2. test model performence
 
 ## tree attention
 
