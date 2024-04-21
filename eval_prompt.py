@@ -19,7 +19,7 @@ from transformers import AutoModelForCausalLM, AutoConfig
 from viz_utils import draw_line_char, write_csv_line
 
 from speculative_inference import SPD
-from baseline import Ssd, Lade, Base
+from baseline import Ssd, Lade, Base, CohereForCausalLM
 from lveval_utils import *
 
 CLASS_MAP = {
@@ -80,7 +80,6 @@ def main(args):
                 model_name_or_path,
                 trust_remote_code=True,
             )
-        # TODO: support for LWM
         config = LlamaConfig.from_pretrained(
             model_name_or_path,
             trust_remote_code=True,
@@ -109,6 +108,28 @@ def main(args):
                 use_safetensors=False,
             )
             print("not use_safetensors")
+    elif config.model_type == "cohere":
+        print("modeling cohere")
+        try:
+            model = CohereForCausalLM.from_pretrained(
+                model_name_or_path,
+                device_map="auto",
+                # attn_implementation="eager", # use LlamaAttention to test
+                attn_implementation="flash_attention_2", # eagle not support flash attention yet
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                use_safetensors=True,
+            )
+        except:
+            model = CohereForCausalLM.from_pretrained(
+                model_name_or_path,
+                device_map="auto",
+                # attn_implementation="eager", # use LlamaAttention to test
+                attn_implementation="flash_attention_2", # eagle not support flash attention yet
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                use_safetensors=False,
+            )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,
@@ -208,6 +229,7 @@ def main(args):
 
     all_decoding_tps = []
     all_decoding_time = []
+    all_decoding_time = []
     all_acc = []
     all_mem_used = []
     x_data = []
@@ -230,50 +252,79 @@ def main(args):
 
         if dataset_real_name in LVEVAL_DATASET_NAMES:
             prompt_format = LVEVAL_DATASET_PROMPT[dataset_real_name]
-            prompt = prompt_format.format(**sample)
-            input_text = truncate_prompt(tokenizer, prompt, args.max_token_len)
+            question = prompt_format.format(**sample)
         else:
             context_data = sample["context"]
             input_data = sample["input"]
-            input_text = f"{context_data}\n{input_data}"
+            question = f"{context_data}\n{input_data}\n"
 
+        # label fixup to prevent LLM repeat
+        try:
+            # lveval "gold_ans"
+            label = sample["gold_ans"]
+        except:
+            # infinit bandwith: "answer"
+            label = sample["answer"][0]
+
+        max_gen_unit = 20
+        tokenized_label = tokenizer(label, return_tensors="pt", return_attention_mask=True).input_ids.to(model.device)
+        lable_len = tokenized_label.shape[1]
+
+        if len(x_data) < cnt + 1:
+            x_data.append([])
+            all_mem_used.append([])
+            all_decoding_tps.append([])
+            all_decoding_time.append([])
+            all_out_list.append([])
+            all_acc.append([])
+
+            all_acc_list.append([])
+            all_max_sample_list.append([])
+            all_tp_list.append([])
+
+        generated_len = 0
+        answer_len = min(lable_len, max_gen_len)
+        past_key_values = None
+
+        prompt = question
+        input_text = truncate_prompt(tokenizer, prompt, args.max_token_len)
         tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
         input_ids = tokenized.input_ids.to(model.device)
         mask = tokenized.attention_mask.to(model.device)
-        if input_ids.shape[1] > args.max_token_len:
-            continue
 
-        for _ in [0]:
+        # (bs, seqlen)
+        input_token = input_ids
+        attention_mask = mask
 
+        print("input token size:", input_token.shape)
+        batch_size, token_len = input_token.shape
+        end_pos = token_len
 
-            # (bs, seqlen)
-            input_token = input_ids
-            attention_mask = mask
+        # warmup
+        model.generate(
+                input_ids=input_token,
+                attention_mask=attention_mask,
+                past_key_values=None,
+                max_gen_len=args.warmup_step,
+                max_sample=max_sample, algo=1, args=args)
 
-            print("input token size:", input_token.shape)
-            batch_size, token_len = input_token.shape
+        # renew cache manager after warmup
+        if isinstance(model, SPD):
+            model.cache_manager.reset()
+
+        for start_pos in range(0, answer_len, max_gen_unit):
+            assert past_key_values is None or past_key_values[0][0].shape[2] == token_len + start_pos - max_gen_unit
 
             total_time = time.time()
-            past_key_values = None
-            # warmup
-            model.generate(
-                    input_ids=input_token,
-                    attention_mask=attention_mask,
-                    past_key_values=None,
-                    max_gen_len=args.warmup_step,
-                    max_sample=max_sample, algo=1, args=args)
-
-            # renew cache manager after warmup
-            if isinstance(model, SPD):
-                model.cache_manager.reset()
-
             # generation start
-            generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
+            past_key_values, generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
                     input_ids=input_token,
                     attention_mask=attention_mask,
-                    past_key_values=None,
-                    max_gen_len=max_gen_len,
-                    max_sample=max_sample, algo=args.algo, args=args)
+                    past_key_values=past_key_values,
+                    max_gen_len=max_gen_unit,
+                    max_sample=max_sample,
+                    start_off=max(0, end_pos - max_gen_unit),
+                    algo=args.algo, args=args)
             torch.cuda.synchronize()
             total_time = time.time() - total_time
 
@@ -289,14 +340,36 @@ def main(args):
                     .split(" ")
                 )
 
-                print()
                 print(" ".join(generated_text), flush=True)
-                all_out_list.append(generated_text)
+                all_out_list[cnt].append(generated_text)
 
             if isinstance(generated_ids, list):
                 generated_len = len(generated_ids)
             else:
                 generated_len = generated_ids.shape[1]
+
+            if generated_len <= 1:
+                break
+
+            # trimed kv cache to init state
+            past_key_values_trimmed = []
+            assert past_key_values
+            # TODO: support **LLAMA** kvcache truncte only for now
+            # k, v (batch, head, seq, hidden_dim)
+            for kv in past_key_values:
+                k, v = kv
+                # NOTE: the indexing is specific for bloom. This won't work for other models
+                # For example llama k, v should be (batch, num_head, seq_len, hidden_dim)
+                k = k[:, :, :end_pos, :]
+                v = v[:, :, :end_pos, :]
+                kv_trimmed = (k, v)
+                past_key_values_trimmed.append(kv_trimmed)
+
+            past_key_values = past_key_values_trimmed
+
+            attention_mask = torch.ones(batch_size, end_pos).to(model.device)
+            input_token = tokenized_label[0, start_pos:start_pos+max_gen_unit].unsqueeze(0)
+            end_pos += max_gen_unit
 
             # NOTE: second per token
             decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
@@ -304,29 +377,30 @@ def main(args):
             device = next(model.parameters()).device
             memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
 
-            if len(x_data) < cnt + 1:
-                x_data.append([])
-                all_mem_used.append([])
-                all_decoding_tps.append([])
-                all_decoding_time.append([])
-                all_acc.append([])
-
             x_data[cnt].append(token_len)
             all_mem_used[cnt].append(memory_used)
             all_decoding_tps[cnt].append(decode_tokens_per_second)
             all_decoding_time[cnt].append(np.sum(decode_time))
             all_acc[cnt].append(np.mean(accuracy))
 
-            all_acc_list.append(accuracy)
-            all_max_sample_list.append(max_sample_list)
-            all_tp_list.append(tp_list)
+            all_acc_list[cnt].append(accuracy)
+            all_max_sample_list[cnt].append(max_sample_list)
+            all_tp_list[cnt].append(tp_list)
 
-            print(f"{cnt}/{max_test_count}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+            print(f"{cnt}/{max_test_count} {start_pos}/{answer_len}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}, s/iter {total_time:.2f}")
 
             generated_ids = None
-            input_token = None
             gc.collect()
             torch.cuda.empty_cache()
+
+        if generated_len <= 1:
+            continue
+
+        x_data[cnt] = [np.mean(x_data[cnt])]
+        all_mem_used[cnt] = [np.mean(all_mem_used[cnt])]
+        all_decoding_tps[cnt] = [np.mean(all_decoding_tps[cnt])]
+        all_decoding_time[cnt] = [np.mean(all_decoding_time[cnt])]
+        all_acc[cnt] = [np.mean(all_acc[cnt])]
 
         cnt += 1
         if cnt >= max_test_count:
@@ -369,7 +443,10 @@ def main(args):
             write_csv_line(file, "max_sample", all_max_sample_list[pid])
             write_csv_line(file, "accuracy", all_acc_list[pid])
             write_csv_line(file, "tp", all_tp_list[pid])
-            write_csv_line(file, "gen", all_out_list[pid])
+            try:
+                write_csv_line(file, "gen", [all_out_list[pid]])
+            except:
+                pass
 
     # save ave data as csv
     with open(f"{args.output_dir}/{args.infer_type}_AVE_{name}_ds_{dataset_name}.csv", "w") as file:

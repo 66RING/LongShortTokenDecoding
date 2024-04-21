@@ -40,7 +40,8 @@ class Base:
 
         # init generated_ids
         generated_ids = pred_token_idx
-        for i in tqdm(range(max_gen_len - 1)):
+        # for i in tqdm(range(max_gen_len - 1)):
+        for i in range(max_gen_len - 1):
             # TODO: debug
             if self.tokenizer.eos_token_id == generated_ids[0, -1]:
                 break
@@ -60,6 +61,6 @@ class Base:
         decode_time = time.time() - decode_time
         acc = [1]
 
-        return generated_ids, decode_time, acc
+        return past_key_values, generated_ids, decode_time, acc, [], []
 
 
