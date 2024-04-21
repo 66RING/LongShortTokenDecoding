@@ -28,8 +28,9 @@ class Ssd:
         ):
         model = self.model
 
-        generated_ids, decode_time, acc, _, _ = self_speculative_sample(model, self.tokenizer, input_ids, max_new_tokens=max_gen_len)
+        with torch.no_grad():
+            past_key_values, generated_ids, decode_time, acc, _, _ = self_speculative_sample(model, self.tokenizer, input_ids, max_new_tokens=max_gen_len, past_key_values=past_key_values)
 
-        return generated_ids, decode_time, acc, [], []
+        return past_key_values, generated_ids, decode_time, acc, [], []
 
 

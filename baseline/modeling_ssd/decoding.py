@@ -189,7 +189,7 @@ def max_fn(x, eps=1e-6):
 
 def self_speculative_sample(model, tokenizer, input_ids, max_new_tokens=10, early_stop=False,
                  max_step_draft=8, th_stop_draft=0.5, th_random_draft=1.0, auto_th_stop_draft=True, auto_parameters=[1,0.5,0.9,1e-2,0.9],
-                 do_sample=False, do_sample_draft=False, 
+                 do_sample=False, do_sample_draft=False, past_key_values = None,
                  top_k=0, top_p=0.85, temperature=0.2):
     
     step = 0
@@ -200,7 +200,6 @@ def self_speculative_sample(model, tokenizer, input_ids, max_new_tokens=10, earl
     generate_ids = torch.empty([input_ids.size(0), max_new_tokens+max_step_draft], dtype=torch.long, device=model.device)
     draft_generate_ids = torch.empty([input_ids.size(0), max_step_draft+2], dtype=torch.long, device=model.device)
     draft_generate_probs = torch.empty([input_ids.size(0), max_step_draft, model.config.vocab_size], dtype=torch.float, device=model.device)
-    past_key_values = None
 
     n_matched = 0
     n_drafted = 0
@@ -336,7 +335,7 @@ def self_speculative_sample(model, tokenizer, input_ids, max_new_tokens=10, earl
             
     # NOTE: refectory API
     acc = n_matched/n_drafted
-    return generate_ids, decode_time, acc, [], []
+    return past_key_values, generate_ids, decode_time, acc, [], []
 
     # return {
     #     'generate_ids': generate_ids,
