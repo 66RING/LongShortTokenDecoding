@@ -399,7 +399,7 @@ def main(args):
         x_data[cnt] = [np.mean(x_data[cnt])]
         all_mem_used[cnt] = [np.mean(all_mem_used[cnt])]
         all_decoding_tps[cnt] = [np.mean(all_decoding_tps[cnt])]
-        all_decoding_time[cnt] = [np.mean(all_decoding_time[cnt])]
+        all_decoding_time[cnt] = [np.sum(all_decoding_time[cnt])]
         all_acc[cnt] = [np.mean(all_acc[cnt])]
 
         cnt += 1

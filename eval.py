@@ -238,6 +238,19 @@ def main(args):
     all_tp_list = []
     all_out_list = []
     for sample in dataset:
+        if len(x_data) < cnt + 1:
+            x_data.append([])
+            all_mem_used.append([])
+            all_decoding_tps.append([])
+            all_decoding_time.append([])
+            all_out_list.append([])
+            all_acc.append([])
+
+            all_acc_list.append([])
+            all_max_sample_list.append([])
+            all_tp_list.append([])
+
+
         input_text = sample[args.feature]
         tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
         input_ids = tokenized.input_ids.to(model.device)
@@ -255,8 +268,15 @@ def main(args):
             input_token = input_ids[:, :seqlen]
             attention_mask = mask[:, :seqlen]
 
+            # each generate a unit to prevent LLM repeat it's answer
+            max_gen_unit = 20
+            tokenized_label = input_ids[:, seqlen:seqlen + max_gen_len]
+            generated_len = 0
+            answer_len = max_gen_len
+
             print("input token size:", input_token.shape)
             batch_size, token_len = input_token.shape
+            end_pos = token_len
 
             total_time = time.time()
             past_key_values = None
@@ -272,69 +292,94 @@ def main(args):
             if isinstance(model, SPD):
                 model.cache_manager.reset()
 
-            # generation start
-            generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
-                    input_ids=input_token,
-                    attention_mask=attention_mask,
-                    past_key_values=None,
-                    max_gen_len=max_gen_len,
-                    max_sample=max_sample, algo=args.algo, args=args)
-            torch.cuda.synchronize()
-            total_time = time.time() - total_time
+            for start_pos in range(0, answer_len, max_gen_unit):
+                # generation start
+                past_key_values, generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
+                        input_ids=input_token,
+                        attention_mask=attention_mask,
+                        past_key_values=past_key_values,
+                        max_gen_len=max_gen_len,
+                        start_off=max(0, end_pos - max_gen_unit),
+                        max_sample=max_sample, algo=args.algo, args=args)
+                torch.cuda.synchronize()
+                total_time = time.time() - total_time
 
-            if args.print:
-                generated_text = (
-                    tokenizer.decode(
-                        generated_ids[0],
-                        skip_special_tokens=True,
-                        clean_up_tokenization_spaces=True,
-                        spaces_between_special_tokens=False,
+                if args.print:
+                    generated_text = (
+                        tokenizer.decode(
+                            generated_ids[0],
+                            skip_special_tokens=True,
+                            clean_up_tokenization_spaces=True,
+                            spaces_between_special_tokens=False,
+                        )
+                        .strip()
+                        .split(" ")
                     )
-                    .strip()
-                    .split(" ")
-                )
 
-                print()
-                print(" ".join(generated_text), flush=True)
-                all_out_list.append(generated_text)
+                    print()
+                    print(" ".join(generated_text), flush=True)
+                    all_out_list[cnt].append(generated_text)
 
-            if isinstance(generated_ids, list):
-                generated_len = len(generated_ids)
-            else:
-                generated_len = generated_ids.shape[1]
+                if isinstance(generated_ids, list):
+                    generated_len = len(generated_ids)
+                else:
+                    generated_len = generated_ids.shape[1]
 
+                if generated_len == 1:
+                    break
+
+                # trimed kv cache to init state
+                past_key_values_trimmed = []
+                assert past_key_values
+                # TODO: support **LLAMA** kvcache truncte only for now
+                # k, v (batch, head, seq, hidden_dim)
+                for kv in past_key_values:
+                    k, v = kv
+                    # NOTE: the indexing is specific for bloom. This won't work for other models
+                    # For example llama k, v should be (batch, num_head, seq_len, hidden_dim)
+                    k = k[:, :, :end_pos, :]
+                    v = v[:, :, :end_pos, :]
+                    kv_trimmed = (k, v)
+                    past_key_values_trimmed.append(kv_trimmed)
+
+                past_key_values = past_key_values_trimmed
+                attention_mask = torch.ones(batch_size, end_pos).to(model.device)
+                input_token = tokenized_label[0, start_pos:start_pos+max_gen_unit].unsqueeze(0)
+                end_pos += max_gen_unit
+
+                # NOTE: second per token
+                decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
+
+                device = next(model.parameters()).device
+                memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
+
+                x_data[cnt].append(token_len)
+                all_mem_used[cnt].append(memory_used)
+                all_decoding_tps[cnt].append(decode_tokens_per_second)
+                all_decoding_time[cnt].append(np.sum(decode_time))
+                all_acc[cnt].append(np.mean(accuracy))
+
+                all_acc_list[cnt].append(accuracy)
+                all_max_sample_list[cnt].append(max_sample_list)
+                all_tp_list[cnt].append(tp_list)
+
+                print(f"{cnt}/{max_test_count}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+
+                generated_ids = None
+                gc.collect()
+                torch.cuda.empty_cache()
+
+                # generation unit done
+
+            # this point generation done
             if generated_len == 1:
-                continue
+                break
 
-            # NOTE: second per token
-            decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
-
-            device = next(model.parameters()).device
-            memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
-
-            if len(x_data) < cnt + 1:
-                x_data.append([])
-                all_mem_used.append([])
-                all_decoding_tps.append([])
-                all_decoding_time.append([])
-                all_acc.append([])
-
-            x_data[cnt].append(token_len)
-            all_mem_used[cnt].append(memory_used)
-            all_decoding_tps[cnt].append(decode_tokens_per_second)
-            all_decoding_time[cnt].append(np.sum(decode_time))
-            all_acc[cnt].append(np.mean(accuracy))
-
-            all_acc_list.append(accuracy)
-            all_max_sample_list.append(max_sample_list)
-            all_tp_list.append(tp_list)
-
-            print(f"{cnt}/{max_test_count}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
-
-            generated_ids = None
-            input_token = None
-            gc.collect()
-            torch.cuda.empty_cache()
+            x_data[cnt] = [np.mean(x_data[cnt])]
+            all_mem_used[cnt] = [np.mean(all_mem_used[cnt])]
+            all_decoding_tps[cnt] = [np.mean(all_decoding_tps[cnt])]
+            all_decoding_time[cnt] = [np.sum(all_decoding_time[cnt])]
+            all_acc[cnt] = [np.mean(all_acc[cnt])]
 
         cnt += 1
         if cnt >= max_test_count:
