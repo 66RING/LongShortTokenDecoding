@@ -19,7 +19,7 @@ from transformers import AutoModelForCausalLM, AutoConfig
 from viz_utils import draw_line_char, write_csv_line
 
 from speculative_inference import SPD
-from baseline import Ssd, Lade, Base
+from baseline import Ssd, Lade, Base, CohereForCausalLM
 
 CLASS_MAP = {
     "lade": Lade,
@@ -80,7 +80,6 @@ def main(args):
                 model_name_or_path,
                 trust_remote_code=True,
             )
-        # TODO: support for LWM
         config = LlamaConfig.from_pretrained(
             model_name_or_path,
             trust_remote_code=True,
@@ -109,6 +108,28 @@ def main(args):
                 use_safetensors=False,
             )
             print("not use_safetensors")
+    elif config.model_type == "cohere":
+        print("modeling cohere")
+        try:
+            model = CohereForCausalLM.from_pretrained(
+                model_name_or_path,
+                device_map="auto",
+                # attn_implementation="eager", # use LlamaAttention to test
+                attn_implementation="flash_attention_2", # eagle not support flash attention yet
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                use_safetensors=True,
+            )
+        except:
+            model = CohereForCausalLM.from_pretrained(
+                model_name_or_path,
+                device_map="auto",
+                # attn_implementation="eager", # use LlamaAttention to test
+                attn_implementation="flash_attention_2", # eagle not support flash attention yet
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                use_safetensors=False,
+            )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,
@@ -245,7 +266,7 @@ def main(args):
                     attention_mask=attention_mask,
                     past_key_values=None,
                     max_gen_len=args.warmup_step,
-                    max_sample=max_sample)
+                    max_sample=max_sample, algo=1, args=args)
 
             # renew cache manager after warmup
             if isinstance(model, SPD):
@@ -257,7 +278,7 @@ def main(args):
                     attention_mask=attention_mask,
                     past_key_values=None,
                     max_gen_len=max_gen_len,
-                    max_sample=max_sample)
+                    max_sample=max_sample, algo=args.algo, args=args)
             torch.cuda.synchronize()
             total_time = time.time() - total_time
 
@@ -281,6 +302,9 @@ def main(args):
                 generated_len = len(generated_ids)
             else:
                 generated_len = generated_ids.shape[1]
+
+            if generated_len == 1:
+                continue
 
             # NOTE: second per token
             decode_tokens_per_second = batch_size * generated_len / np.sum(decode_time)
