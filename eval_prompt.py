@@ -236,6 +236,8 @@ def main(args):
 
     # (max_sample, acc)
     all_max_sample_list = []
+    all_start_token_list = []
+    all_start_token_char_list = []
     all_acc_list = []
     all_tp_list = []
     all_out_list = []
@@ -280,6 +282,8 @@ def main(args):
 
             all_acc_list.append([])
             all_max_sample_list.append([])
+            all_start_token_list.append([])
+            all_start_token_char_list.append([])
             all_tp_list.append([])
 
         generated_len = 0
@@ -317,7 +321,7 @@ def main(args):
 
             total_time = time.time()
             # generation start
-            past_key_values, generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
+            generation_result = model.generate(
                     input_ids=input_token,
                     attention_mask=attention_mask,
                     past_key_values=past_key_values,
@@ -327,6 +331,14 @@ def main(args):
                     algo=args.algo, args=args)
             torch.cuda.synchronize()
             total_time = time.time() - total_time
+
+            past_key_values = generation_result.past_key_values
+            generated_ids = generation_result.generated_ids
+            decode_time = generation_result.decode_time
+            accuracy = generation_result.accuracy
+            max_sample_list = generation_result.max_sample_list
+            tp_list = generation_result.tp_list
+            start_token_list = generation_result.start_token_list
 
             if args.print:
                 generated_text = (
@@ -377,6 +389,7 @@ def main(args):
             device = next(model.parameters()).device
             memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
 
+            # update data of sample[cnt]
             x_data[cnt].append(token_len)
             all_mem_used[cnt].append(memory_used)
             all_decoding_tps[cnt].append(decode_tokens_per_second)
@@ -385,6 +398,12 @@ def main(args):
 
             all_acc_list[cnt].append(accuracy)
             all_max_sample_list[cnt].append(max_sample_list)
+            all_start_token_list[cnt].append(start_token_list)
+            _chars = []
+            for c in start_token_list:
+                _chars.append(tokenizer.decode(c))
+            all_start_token_char_list[cnt].append(_chars)
+
             all_tp_list[cnt].append(tp_list)
 
             print(f"{cnt}/{max_test_count} {start_pos}/{answer_len}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}, s/iter {total_time:.2f}")
@@ -437,17 +456,6 @@ def main(args):
             write_csv_line(file, "accuracy", all_acc[i])
             write_csv_line(file, "memory_used", all_mem_used[i])
 
-    # save (max_sample, acc) as csv
-    with open(f"{args.output_dir}/{args.infer_type}_max_sample_acc_{name}_ds_{dataset_name}.csv", "w") as file:
-        for pid in range(len(all_max_sample_list)):
-            write_csv_line(file, "max_sample", all_max_sample_list[pid])
-            write_csv_line(file, "accuracy", all_acc_list[pid])
-            write_csv_line(file, "tp", all_tp_list[pid])
-            try:
-                write_csv_line(file, "gen", [all_out_list[pid]])
-            except:
-                pass
-
     # save ave data as csv
     with open(f"{args.output_dir}/{args.infer_type}_AVE_{name}_ds_{dataset_name}.csv", "w") as file:
         write_csv_line(file, "token_len", x_data[0])
@@ -455,6 +463,23 @@ def main(args):
         write_csv_line(file, "decode_time", [np.mean(list(row)) for row in zip(*all_decoding_time)])
         write_csv_line(file, "accuracy", [np.mean(list(row)) for row in zip(*all_acc)])
         write_csv_line(file, "memory_used", [np.mean(list(row)) for row in zip(*all_mem_used)])
+
+    # save complex data as json
+    items = []
+    for pid in range(len(all_max_sample_list)):
+        item = {
+            "max_sample": all_max_sample_list[pid],
+            "start_token": all_start_token_list[pid],
+            "start_token_char": all_start_token_char_list[pid],
+            "accuracy": all_acc_list[pid],
+            "tp": all_tp_list[pid],
+            "gen": [all_out_list[pid]],
+        }
+        items.append(item)
+
+    with open(f"{args.output_dir}/{args.infer_type}_max_sample_acc_{name}_ds_{dataset_name}.json", "w") as json_file:
+        json_data = json.dumps(items, indent=2)
+        json_file.write(json_data)
 
 
 

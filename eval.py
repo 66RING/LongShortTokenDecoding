@@ -232,24 +232,13 @@ def main(args):
     all_mem_used = []
     x_data = []
 
-    # (max_sample, acc)
-    all_max_sample_list = []
-    all_acc_list = []
-    all_tp_list = []
-    all_out_list = []
     for sample in dataset:
         if len(x_data) < cnt + 1:
             x_data.append([])
             all_mem_used.append([])
             all_decoding_tps.append([])
             all_decoding_time.append([])
-            all_out_list.append([])
             all_acc.append([])
-
-            all_acc_list.append([])
-            all_max_sample_list.append([])
-            all_tp_list.append([])
-
 
         input_text = sample[args.feature]
         tokenized = tokenizer(input_text, return_tensors="pt", return_attention_mask=True)
@@ -259,6 +248,7 @@ def main(args):
         if input_ids.shape[1] < args.max_token_len:
             continue
 
+        generated_len = 0
         for seqlen in range(args.min_token_len, args.max_token_len + 1, args.step_token_len):
         # for seqlen in [4*1024, 8*1024, 16*1024, 32*1024, 64*1024, 100*1024]:
             if args.max_token_len < seqlen:
@@ -271,14 +261,12 @@ def main(args):
             # each generate a unit to prevent LLM repeat it's answer
             max_gen_unit = 20
             tokenized_label = input_ids[:, seqlen:seqlen + max_gen_len]
-            generated_len = 0
             answer_len = max_gen_len
 
             print("input token size:", input_token.shape)
             batch_size, token_len = input_token.shape
             end_pos = token_len
 
-            total_time = time.time()
             past_key_values = None
             # warmup
             model.generate(
@@ -291,10 +279,18 @@ def main(args):
             # renew cache manager after warmup
             if isinstance(model, SPD):
                 model.cache_manager.reset()
+            
 
+            local_all_decoding_tps = []
+            local_all_decoding_time = []
+            local_all_acc = []
+            local_all_mem_used = []
+            local_x_data = []
             for start_pos in range(0, answer_len, max_gen_unit):
+                total_time = time.time()
                 # generation start
-                past_key_values, generated_ids, decode_time, accuracy, max_sample_list, tp_list = model.generate(
+
+                generation_result = model.generate(
                         input_ids=input_token,
                         attention_mask=attention_mask,
                         past_key_values=past_key_values,
@@ -303,6 +299,14 @@ def main(args):
                         max_sample=max_sample, algo=args.algo, args=args)
                 torch.cuda.synchronize()
                 total_time = time.time() - total_time
+
+                past_key_values = generation_result.past_key_values
+                generated_ids = generation_result.generated_ids
+                decode_time = generation_result.decode_time
+                accuracy = generation_result.accuracy
+                max_sample_list = generation_result.max_sample_list
+                tp_list = generation_result.tp_list
+                start_token_list = generation_result.start_token_list
 
                 if args.print:
                     generated_text = (
@@ -318,14 +322,13 @@ def main(args):
 
                     print()
                     print(" ".join(generated_text), flush=True)
-                    all_out_list[cnt].append(generated_text)
 
                 if isinstance(generated_ids, list):
                     generated_len = len(generated_ids)
                 else:
                     generated_len = generated_ids.shape[1]
 
-                if generated_len == 1:
+                if generated_len <= 1:
                     break
 
                 # trimed kv cache to init state
@@ -353,17 +356,14 @@ def main(args):
                 device = next(model.parameters()).device
                 memory_used = torch.cuda.max_memory_allocated(device) / (1024 ** 3)
 
-                x_data[cnt].append(token_len)
-                all_mem_used[cnt].append(memory_used)
-                all_decoding_tps[cnt].append(decode_tokens_per_second)
-                all_decoding_time[cnt].append(np.sum(decode_time))
-                all_acc[cnt].append(np.mean(accuracy))
+                local_x_data.append(token_len)
+                local_all_mem_used.append(memory_used)
+                local_all_decoding_tps.append(decode_tokens_per_second)
+                local_all_decoding_time.append(np.sum(decode_time))
+                local_all_acc.append(np.mean(accuracy))
 
-                all_acc_list[cnt].append(accuracy)
-                all_max_sample_list[cnt].append(max_sample_list)
-                all_tp_list[cnt].append(tp_list)
 
-                print(f"{cnt}/{max_test_count}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}")
+                print(f"{cnt}/{max_test_count} {start_pos}/{answer_len}: input token_len: {token_len}, generated_len {generated_len},decode_time: {decode_time:.2f}, decode_tps: {decode_tokens_per_second:.2f}, accuracy: {np.mean(accuracy):.2f}, s/iter {total_time:.2f}")
 
                 generated_ids = None
                 gc.collect()
@@ -372,14 +372,23 @@ def main(args):
                 # generation unit done
 
             # this point generation done
-            if generated_len == 1:
+            if generated_len <= 1:
+                x_data[cnt] = []
+                all_mem_used[cnt] = []
+                all_decoding_tps[cnt] = []
+                all_decoding_time[cnt] = []
+                all_acc[cnt] = []
                 break
 
-            x_data[cnt] = [np.mean(x_data[cnt])]
-            all_mem_used[cnt] = [np.mean(all_mem_used[cnt])]
-            all_decoding_tps[cnt] = [np.mean(all_decoding_tps[cnt])]
-            all_decoding_time[cnt] = [np.sum(all_decoding_time[cnt])]
-            all_acc[cnt] = [np.mean(all_acc[cnt])]
+            x_data[cnt].append(np.mean(local_x_data[cnt]))
+            all_mem_used[cnt].append(np.mean(local_all_mem_used[cnt]))
+            all_decoding_tps[cnt].append(np.mean(local_all_decoding_tps[cnt]))
+            all_decoding_time[cnt].append(np.sum(local_all_decoding_time[cnt]))
+            all_acc[cnt].append(np.mean(local_all_acc[cnt]))
+            print(">>>>>>>> ", seqlen, all_decoding_tps[cnt])
+
+        if generated_len <= 1:
+            continue
 
         cnt += 1
         if cnt >= max_test_count:
@@ -415,17 +424,6 @@ def main(args):
             write_csv_line(file, "decode_time", all_decoding_time[i])
             write_csv_line(file, "accuracy", all_acc[i])
             write_csv_line(file, "memory_used", all_mem_used[i])
-
-    # save (max_sample, acc) as csv
-    with open(f"{args.output_dir}/{args.infer_type}_max_sample_acc_{name}_ds_{dataset_name}.csv", "w") as file:
-        for pid in range(len(all_max_sample_list)):
-            write_csv_line(file, "max_sample", all_max_sample_list[pid])
-            write_csv_line(file, "accuracy", all_acc_list[pid])
-            write_csv_line(file, "tp", all_tp_list[pid])
-            try:
-                write_csv_line(file, "gen", [all_out_list[pid]])
-            except:
-                pass
 
     # save ave data as csv
     with open(f"{args.output_dir}/{args.infer_type}_AVE_{name}_ds_{dataset_name}.csv", "w") as file:
