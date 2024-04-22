@@ -1,6 +1,7 @@
 import torch
 import time
 from tqdm import tqdm
+from utils import GenerationResult
 
 class Base:
     def __init__(self, model, tokenizer):
@@ -59,8 +60,13 @@ class Base:
 
         torch.cuda.synchronize()
         decode_time = time.time() - decode_time
-        acc = [1]
 
-        return past_key_values, generated_ids, decode_time, acc, [], []
+        return GenerationResult(
+            past_key_values=past_key_values,
+            generated_ids=generated_ids,
+            decode_time=decode_time,
+        )
+
+
 
 

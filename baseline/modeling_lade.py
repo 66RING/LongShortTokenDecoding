@@ -2,6 +2,7 @@ import torch
 import time
 from tqdm import tqdm
 import os
+from utils import GenerationResult
 
 class Lade:
     def __init__(self, model, tokenizer):
@@ -52,7 +53,10 @@ class Lade:
             generated_ids, past_key_values = model.generate(input_ids=generated_ids, attention_mask=attention_mask, past_key_values=past_key_values, max_new_tokens=max_gen_len, do_sample=False, use_cache=True)
         torch.cuda.synchronize()
         decode_time = time.time() - decode_time
-        acc = [1]
 
-        return past_key_values, generated_ids, decode_time, acc, [], []
+        return GenerationResult(
+            past_key_values=past_key_values,
+            generated_ids=generated_ids,
+            decode_time=decode_time,
+        )
 

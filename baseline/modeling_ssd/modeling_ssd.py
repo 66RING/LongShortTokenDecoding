@@ -3,6 +3,7 @@ import time
 from tqdm import tqdm
 from .decoding import self_speculative_sample
 import json
+from utils import GenerationResult
 
 with open('skip_layers.json', 'r') as f:
     skip_layers = json.load(f)
@@ -31,6 +32,12 @@ class Ssd:
         with torch.no_grad():
             past_key_values, generated_ids, decode_time, acc, _, _ = self_speculative_sample(model, self.tokenizer, input_ids, max_new_tokens=max_gen_len, past_key_values=past_key_values)
 
-        return past_key_values, generated_ids, decode_time, acc, [], []
+        return GenerationResult(
+            past_key_values=past_key_values,
+            generated_ids=generated_ids,
+            decode_time=decode_time,
+        )
+
+
 
 
