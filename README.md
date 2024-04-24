@@ -15,7 +15,5 @@ model.generate(input_ids=input_ids)
 
 A concurrent work of [TriForce](https://github.com/Infini-AI-Lab/TriForce). TriForce is a great job with much much more experiment and much much more robust than us.
 
-As for my first job in LLM serving I was in awe by the speed of deveploment and feeling depressed. So I tidy up my code and open source for more blade leanrer like me.
-
-May chaos guide thee. May locality take the world.
+peace.
 
