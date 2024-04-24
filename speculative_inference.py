@@ -2,15 +2,13 @@ import torch
 import time
 from tqdm import tqdm
 from typing import List, Optional, Set, Tuple, Union
+import json
 from torch.nn import functional as F
 from sampler import TopkToppLogitsSampler, StrictAccepter
 from cache_manager import DynamicCache, SinkCache, ShortCache, TcpCache
+from utils import GenerationResult
 
-
-
-# TODO: rename
-# Long short token decoding
-class SPD:
+class Lstd:
     def __init__(self, model, tokenizer, cache_manager):
         self.draft_model = model
         self.target_model = model
@@ -24,6 +22,7 @@ class SPD:
         self.logits_sampler = TopkToppLogitsSampler(top_k=0, top_p=0.0)
         self.accepter = StrictAccepter()
 
+
     def parameters(self):
         return self.target_model.parameters()
 
@@ -36,6 +35,7 @@ class SPD:
         max_gen_len: int,
         max_sample: int = 4,
         attention_mask = None,
+        start_off = 0,
         **kwargs,
     # TODO: format return
     ):
@@ -58,29 +58,23 @@ class SPD:
             accuracy: List[float], accept rate for each iteration
         '''
         bsz, input_seqlen = input_ids.shape
+        input_seqlen += start_off
 
         accuracy = []
 
-        # TODO: wrap as an easy to use kv cache interface
-
         # prefill phase and kv cache init
-        if past_key_values is None:
-            target_outputs = self.target_model(
-                input_ids=input_ids,
-                # TODO: match with baseline
-                past_key_values=past_key_values,
-                use_cache=True,
-            )
-            past_key_values = target_outputs.past_key_values
-            # NOTE: sampling may cause huge performance downgrade in prefill phase
-            # pred_token_idx = self.logits_sampler.sample(target_outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
-            pred_token_idx = target_outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-            generated_ids = pred_token_idx
-            input_ids = pred_token_idx
-        else:
-            # TODO: hard code for now
-            assert past_key_values is None
-            generated_ids = torch.empty((bsz, 0), device=input_ids.device, dtype=input_ids.dtype)
+        target_outputs = self.target_model(
+            input_ids=input_ids,
+            # TODO: match with baseline
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        past_key_values = target_outputs.past_key_values
+        # NOTE: sampling may cause huge performance downgrade in prefill phase
+        # pred_token_idx = self.logits_sampler.sample(target_outputs.logits[:, -1, :]).argmax(dim=-1).unsqueeze(1)
+        pred_token_idx = target_outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+        generated_ids = pred_token_idx
+        input_ids = pred_token_idx
 
         draft_next_ids = input_ids
         target_next_ids = input_ids
@@ -88,15 +82,17 @@ class SPD:
         torch.cuda.synchronize()
         decode_time = time.time()
 
-        max_sample = 8
-        mmax_sample = 20
+        init_num = max_sample
+        mmax_sample = 30
         tp_list = []
         max_sample_list = []
+        start_token_list = []
 
         generated_len = generated_ids.shape[1]
-        pbar = tqdm(total=max_gen_len)
+        pbar = tqdm(total=max_gen_len, disable=False)
         cache_size = 0
         acc = 1.0
+        madd = 4
         while generated_len < max_gen_len:
             if self.tokenizer.eos_token_id in generated_ids[0, -(mmax_sample+1):]:
                 break
@@ -207,8 +203,13 @@ class SPD:
             pbar.set_postfix({"cache_size": cache_size, "acc": f"{acc:.2f}", "s": f"{max_sample}"})
             pbar.update(accept_len+1)
 
+            this_input = generated_ids[0, stable_len-1].item()
+            next_input = generated_ids[0, -1].item()
+
             tp_list.append(throughput)
             max_sample_list.append(max_sample)
+            start_token_list.append(this_input)
+
             if isinstance(self.cache_manager, DynamicCache):
                 self.cache_manager.step(acc)
             elif isinstance(self.cache_manager, TcpCache):
@@ -217,6 +218,14 @@ class SPD:
         torch.cuda.synchronize()
         decode_time = time.time() - decode_time
 
-        return generated_ids, decode_time, accuracy, max_sample_list, tp_list
+        return GenerationResult(
+            past_key_values=past_key_values,
+            generated_ids=generated_ids,
+            decode_time=decode_time,
+            accuracy=accuracy,
+            max_sample_list=max_sample_list,
+            tp_list=tp_list,
+            start_token_list=start_token_list
+        )
 
 

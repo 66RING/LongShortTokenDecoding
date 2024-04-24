@@ -134,7 +134,7 @@ class StrictAccepter(Accepter):
         target_probs: torch.Tensor,
         draft_probs: torch.Tensor,
     ) -> bool:
-        return torch.argmax(target_probs) == torch.argmax(draft_probs)
+        return torch.argmax(target_probs).equal(torch.argmax(draft_probs))
 
 
 
