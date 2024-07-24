@@ -1,5 +1,10 @@
 # LSTD
 
+![image](https://github.com/user-attachments/assets/615d732f-6e90-45e7-b58b-57513f524dc2)
+
+![image](https://github.com/user-attachments/assets/683a2a8c-8153-486e-9cbd-8b8c073e5417)
+
+
 ## Usage
 
 ```python
